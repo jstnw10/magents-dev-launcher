@@ -14,6 +14,7 @@ Pod::Spec.new do |s|
 
   s.source_files   = 'Sources/ConvexMobile/**/*.swift', 'Sources/UniFFI/**/*.swift'
   s.vendored_frameworks = 'libconvexmobile-rs.xcframework'
+  s.preserve_paths = 'libconvexmobile-rs.xcframework/**/*'
 
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',

@@ -3,7 +3,7 @@
 
 import Combine
 import Foundation
-@_exported import UniFFI
+// @_exported import UniFFI  // Not needed: under CocoaPods, UniFFI sources compile into this module
 
 /// A client API for interacting with a Convex backend.
 ///
@@ -14,7 +14,7 @@ import Foundation
 /// Consumers of this client should use Swift's ``Decodable``  protocol for handling data received from the
 /// Convex backend.
 public class ConvexClient {
-  let ffiClient: UniFFI.MobileConvexClientProtocol
+  let ffiClient: MobileConvexClientProtocol
   fileprivate let webSocketStateAdapter = WebSocketStateAdapter()
 
   /// Creates a new instance of ``ConvexClient``.
@@ -22,11 +22,11 @@ public class ConvexClient {
   /// - Parameters:
   ///   - deploymentUrl: The Convex backend URL to connect to; find it in the [dashboard](https://dashboard.convex.dev) Settings for your project
   public init(deploymentUrl: String) {
-    self.ffiClient = UniFFI.MobileConvexClient(
+    self.ffiClient = MobileConvexClient(
       deploymentUrl: deploymentUrl, clientId: "swift-\(convexMobileVersion)", webSocketStateSubscriber: webSocketStateAdapter)
   }
 
-  init(ffiClient: UniFFI.MobileConvexClientProtocol) {
+  init(ffiClient: MobileConvexClientProtocol) {
     self.ffiClient = ffiClient
   }
 
@@ -389,7 +389,7 @@ private class WebSocketStateAdapter: WebSocketStateSubscriber {
   
   init() { }
 
-  func onStateChange(state: UniFFI.WebSocketState) {
+  func onStateChange(state: WebSocketState) {
     subject.send(state)
   }
   
