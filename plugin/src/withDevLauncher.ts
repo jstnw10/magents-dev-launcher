@@ -137,8 +137,9 @@ import ConvexMobile
 import Combine
 import Foundation
 
+@objc(ConvexMagentsProvider)
 @MainActor
-final class ConvexMagentsProvider: MagentsDataProvider {
+final class ConvexMagentsProvider: NSObject, MagentsDataProvider {
     private let client: ConvexClient?
     private var cancellables = Set<AnyCancellable>()
 
@@ -186,15 +187,6 @@ private struct ConvexItem: Decodable {
     let _id: String
     let text: String
     let isCompleted: Bool
-}
-
-/// Registers the Convex provider at app launch.
-private enum ConvexMagentsBootstrap {
-    static let _: Void = {
-        Task { @MainActor in
-            MagentsDataStore.register(provider: ConvexMagentsProvider())
-        }
-    }()
 }
 `;
 

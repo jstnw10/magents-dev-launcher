@@ -28,7 +28,17 @@ final class MagentsDataStore: ObservableObject {
 
     // MARK: - Forwarded actions
 
+    /// Attempts to find and register a MagentsDataProvider from the app target.
+    private func discoverProvider() {
+        guard provider == nil else { return }
+        guard let cls = NSClassFromString("ConvexMagentsProvider") as? NSObject.Type else { return }
+        let instance = cls.init()
+        guard let discovered = instance as? MagentsDataProvider else { return }
+        Self.register(provider: discovered)
+    }
+
     func startSubscription() {
+        discoverProvider()
         provider?.startSubscription()
     }
 
