@@ -175,6 +175,7 @@ const withConvexBridge: ConfigPlugin = (config) => {
 import ConvexMobile
 import Combine
 import Foundation
+internal import EXDevLauncher
 
 @objc(ConvexMagentsProvider)
 @MainActor
@@ -182,7 +183,7 @@ final class ConvexMagentsProvider: NSObject, MagentsDataProvider {
     private let client: ConvexClient?
     private var cancellables = Set<AnyCancellable>()
 
-    init() {
+    override init() {
         guard let url = Bundle.main.infoDictionary?["ConvexDeploymentUrl"] as? String,
               !url.isEmpty else {
             client = nil
