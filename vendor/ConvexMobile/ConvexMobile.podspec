@@ -18,6 +18,15 @@ Pod::Spec.new do |s|
 
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
+    'OTHER_LDFLAGS' => '$(inherited) -ObjC',
+    'SWIFT_INCLUDE_PATHS' => [
+      '$(PODS_TARGET_SRCROOT)/libconvexmobile-rs.xcframework/ios-arm64/Headers',
+      '$(PODS_TARGET_SRCROOT)/libconvexmobile-rs.xcframework/ios-arm64-simulator/Headers',
+    ].join(' '),
+  }
+
+  s.user_target_xcconfig = {
+    'OTHER_LDFLAGS' => '$(inherited) -ObjC',
   }
 end
 
