@@ -12,7 +12,7 @@ import * as path from 'path';
 
 import { PluginConfigType, validateConfig } from './pluginConfig';
 
-const pkg = require('expo-dev-launcher/package.json');
+const pkg = require('../../package.json');
 
 /**
  * Adds an SPM dependency on ConvexMobile (from convex-swift) to the main app target.
