@@ -39,22 +39,165 @@ const path = __importStar(require("path"));
 const pluginConfig_1 = require("./pluginConfig");
 const pkg = require('expo-dev-launcher/package.json');
 /**
- * Appends a local CocoaPods reference for ConvexMobile to the consumer's Podfile.
- * The pod source lives at `vendor/ConvexMobile/` inside the expo-dev-launcher package.
+ * Adds an SPM dependency on ConvexMobile (from convex-swift) to the main app target.
+ * This replaces the previous CocoaPods-based approach with Swift Package Manager.
  */
-const withConvexPod = (config) => {
+const withConvexSPM = (config) => {
+    return (0, config_plugins_1.withXcodeProject)(config, (config) => {
+        const project = config.modResults;
+        const targetName = config.modRequest.projectName;
+        const REPO_URL = 'https://github.com/get-convex/convex-swift';
+        const REPO_NAME = 'convex-swift';
+        const PRODUCT_NAME = 'ConvexMobile';
+        const MIN_VERSION = '0.8.1';
+        // --- Step 1: XCRemoteSwiftPackageReference ---
+        if (!project.hash.project.objects['XCRemoteSwiftPackageReference']) {
+            project.hash.project.objects['XCRemoteSwiftPackageReference'] = {};
+        }
+        const packageReferenceUUID = project.generateUuid();
+        const packageRefKey = `${packageReferenceUUID} /* XCRemoteSwiftPackageReference "${REPO_NAME}" */`;
+        project.hash.project.objects['XCRemoteSwiftPackageReference'][packageRefKey] = {
+            isa: 'XCRemoteSwiftPackageReference',
+            repositoryURL: REPO_URL,
+            requirement: {
+                kind: 'upToNextMajorVersion',
+                minimumVersion: MIN_VERSION,
+            },
+        };
+        // --- Step 2: XCSwiftPackageProductDependency ---
+        if (!project.hash.project.objects['XCSwiftPackageProductDependency']) {
+            project.hash.project.objects['XCSwiftPackageProductDependency'] = {};
+        }
+        const packageUUID = project.generateUuid();
+        const productKey = `${packageUUID} /* ${PRODUCT_NAME} */`;
+        project.hash.project.objects['XCSwiftPackageProductDependency'][productKey] = {
+            isa: 'XCSwiftPackageProductDependency',
+            package: packageRefKey,
+            productName: PRODUCT_NAME,
+        };
+        // --- Step 3: Add packageReferences to PBXProject ---
+        const projectId = Object.keys(project.hash.project.objects['PBXProject']).find((key) => !key.endsWith('_comment'));
+        if (projectId) {
+            if (!project.hash.project.objects['PBXProject'][projectId]['packageReferences']) {
+                project.hash.project.objects['PBXProject'][projectId]['packageReferences'] = [];
+            }
+            project.hash.project.objects['PBXProject'][projectId]['packageReferences'].push(packageRefKey);
+        }
+        // --- Step 4: Add PBXBuildFile entry ---
+        const frameworkUUID = project.generateUuid();
+        const frameworkCommentKey = `${frameworkUUID}_comment`;
+        project.hash.project.objects['PBXBuildFile'][frameworkCommentKey] =
+            `${PRODUCT_NAME} in Frameworks`;
+        project.hash.project.objects['PBXBuildFile'][frameworkUUID] = {
+            isa: 'PBXBuildFile',
+            productRef: packageUUID,
+            productRef_comment: PRODUCT_NAME,
+        };
+        // --- Step 5: Add to PBXFrameworksBuildPhase for the main app target ---
+        const nativeTargetId = project.findTargetKey(targetName ?? '');
+        if (nativeTargetId) {
+            const frameworksBuildPhase = project.pbxFrameworksBuildPhaseObj(nativeTargetId);
+            if (frameworksBuildPhase) {
+                frameworksBuildPhase.files.push({
+                    value: frameworkUUID,
+                    comment: `${PRODUCT_NAME} in Frameworks`,
+                });
+            }
+        }
+        // --- Step 6: Add packageProductDependencies to the native target ---
+        if (nativeTargetId) {
+            const nativeTarget = project.pbxNativeTargetSection()[nativeTargetId];
+            if (nativeTarget) {
+                if (!nativeTarget.packageProductDependencies) {
+                    nativeTarget.packageProductDependencies = [];
+                }
+                nativeTarget.packageProductDependencies.push(productKey);
+            }
+        }
+        return config;
+    });
+};
+/**
+ * Generates the ConvexMagentsProvider.swift bridge file in the consumer app's iOS directory.
+ * This file implements the MagentsDataProvider protocol and registers itself with MagentsDataStore.
+ */
+const withConvexBridge = (config) => {
     return (0, config_plugins_1.withDangerousMod)(config, [
         'ios',
         (config) => {
-            const podfilePath = path.join(config.modRequest.platformProjectRoot, 'Podfile');
-            const packageDir = path.dirname(require.resolve('expo-dev-launcher/package.json'));
-            const vendorPath = path.join(packageDir, 'vendor', 'ConvexMobile');
-            let podfileContents = fs.readFileSync(podfilePath, 'utf8');
-            const podLine = `pod 'ConvexMobile', :path => '${vendorPath}'`;
-            if (!podfileContents.includes(podLine)) {
-                podfileContents += `\n${podLine}\n`;
-                fs.writeFileSync(podfilePath, podfileContents, 'utf8');
+            const appName = config.modRequest.projectName ?? '';
+            const bridgePath = path.join(config.modRequest.platformProjectRoot, appName, 'ConvexMagentsProvider.swift');
+            // Avoid overwriting on repeated prebuild runs
+            if (fs.existsSync(bridgePath)) {
+                return config;
             }
+            const bridgeContent = `// AUTO-GENERATED by expo-dev-launcher config plugin — do not edit
+import ConvexMobile
+import Combine
+import Foundation
+
+@MainActor
+final class ConvexMagentsProvider: MagentsDataProvider {
+    private let client: ConvexClient?
+    private var cancellables = Set<AnyCancellable>()
+
+    init() {
+        guard let url = Bundle.main.infoDictionary?["ConvexDeploymentUrl"] as? String,
+              !url.isEmpty else {
+            client = nil
+            return
+        }
+        client = ConvexClient(deploymentUrl: url)
+    }
+
+    func startSubscription() {
+        guard let client else { return }
+
+        client.subscribe(to: "items:list", yielding: [ConvexItem].self)
+            .replaceError(with: [])
+            .receive(on: DispatchQueue.main)
+            .sink { items in
+                MagentsDataStore.shared.update(items: items.map {
+                    MagentsItem(id: $0._id, text: $0.text, isCompleted: $0.isCompleted)
+                })
+            }
+            .store(in: &cancellables)
+    }
+
+    func addItem(text: String) async throws {
+        guard let client else { return }
+        let _: String? = try await client.mutation("items:add", with: ["text": text])
+    }
+
+    func toggleItem(id: String) async throws {
+        guard let client else { return }
+        let _: String? = try await client.mutation("items:toggle", with: ["id": id])
+    }
+
+    func removeItem(id: String) async throws {
+        guard let client else { return }
+        let _: String? = try await client.mutation("items:remove", with: ["id": id])
+    }
+}
+
+/// Mirrors the Convex document shape for decoding.
+private struct ConvexItem: Decodable {
+    let _id: String
+    let text: String
+    let isCompleted: Bool
+}
+
+/// Registers the Convex provider at app launch.
+private enum ConvexMagentsBootstrap {
+    static let _: Void = {
+        Task { @MainActor in
+            MagentsDataStore.register(provider: ConvexMagentsProvider())
+        }
+    }()
+}
+`;
+            fs.mkdirSync(path.dirname(bridgePath), { recursive: true });
+            fs.writeFileSync(bridgePath, bridgeContent, 'utf8');
             return config;
         },
     ]);
@@ -181,9 +324,10 @@ exports.default = (0, config_plugins_1.createRunOncePlugin)((config, props = {})
     }
     config = withLocalNetworkPermission(config);
     config = withStripLocalNetworkKeysForRelease(config);
-    // Convex integration: always add the local pod, conditionally inject the URL
-    config = withConvexPod(config);
+    // Convex integration (conditional on convexUrl)
     if (props.convexUrl) {
+        config = withConvexSPM(config);
+        config = withConvexBridge(config);
         config = withConvexInfoPlist(config, props.convexUrl);
     }
     return config;
