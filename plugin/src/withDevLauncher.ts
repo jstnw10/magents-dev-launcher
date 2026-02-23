@@ -113,6 +113,45 @@ const withConvexSPM: ConfigPlugin = (config) => {
 };
 
 /**
+ * Adds the generated ConvexMagentsProvider.swift to the Xcode project's compile sources.
+ * Without this, the file exists on disk but is never compiled.
+ */
+const withConvexBridgeXcodeRef: ConfigPlugin = (config) => {
+  return withXcodeProject(config, (config) => {
+    const project = config.modResults;
+    const appName = config.modRequest.projectName ?? '';
+    // Use the full relative path (from ios/) so Xcode resolves the file correctly.
+    // The app group has no `path` property, so files must include the subdirectory.
+    const filePath = `${appName}/ConvexMagentsProvider.swift`;
+
+    // Check if already added (avoid duplicates on re-prebuild)
+    if (project.hasFile(filePath)) {
+      return config;
+    }
+
+    // Resolve the PBXGroup key for the app target group by name
+    const groupKey = project.findPBXGroupKey({ name: appName });
+    if (!groupKey) {
+      console.warn(
+        `[Expo Dev Launcher] Could not find PBXGroup "${appName}" to add bridge file`
+      );
+      return config;
+    }
+
+    // addFile creates PBXFileReference + adds to PBXGroup
+    const file = project.addFile(filePath, groupKey);
+    if (file) {
+      file.uuid = project.generateUuid();
+      // Add to PBXBuildFile and PBXSourcesBuildPhase so it compiles
+      project.addToPbxBuildFileSection(file);
+      project.addToPbxSourcesBuildPhase(file);
+    }
+
+    return config;
+  });
+};
+
+/**
  * Generates the ConvexMagentsProvider.swift bridge file in the consumer app's iOS directory.
  * This file implements the MagentsDataProvider protocol and registers itself with MagentsDataStore.
  */
@@ -352,6 +391,7 @@ export default createRunOncePlugin<PluginConfigType>(
     // Convex integration (conditional on convexUrl)
     if (props.convexUrl) {
       config = withConvexSPM(config);
+      config = withConvexBridgeXcodeRef(config);
       config = withConvexBridge(config);
       config = withConvexInfoPlist(config, props.convexUrl);
     }
