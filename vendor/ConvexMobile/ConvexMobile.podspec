@@ -51,7 +51,9 @@ Pod::Spec.new do |s|
 
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
-    'HEADER_SEARCH_PATHS' => '$(inherited) "$(PODS_CONFIGURATION_BUILD_DIR)/XCFrameworkIntermediates/convexmobile-rs/Headers"',
+    # Point to CONFIGURATION_BUILD_DIR where the script phase copies FFI headers.
+    # This is the ONLY location for the convexmobileFFI module to avoid redefinition.
+    'HEADER_SEARCH_PATHS' => '$(inherited) "$(CONFIGURATION_BUILD_DIR)"',
   }
 
   # Force-load ensures ALL symbols from the Rust static lib are available at link time.
