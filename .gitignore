@@ -29,3 +29,5 @@ project.xcworkspace
 buck-out/
 \.buckd/
 *.keystore
+
+.env.local
