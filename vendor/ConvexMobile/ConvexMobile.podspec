@@ -18,10 +18,6 @@ Pod::Spec.new do |s|
 
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
-    'SWIFT_INCLUDE_PATHS' => [
-      '$(PODS_TARGET_SRCROOT)/libconvexmobile-rs.xcframework/ios-arm64/Headers',
-      '$(PODS_TARGET_SRCROOT)/libconvexmobile-rs.xcframework/ios-arm64-simulator/Headers',
-    ].join(' '),
   }
 
   # Force-load ensures ALL symbols from the Rust static lib are available at link time.
