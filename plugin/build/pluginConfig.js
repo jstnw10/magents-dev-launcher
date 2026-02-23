@@ -16,6 +16,10 @@ const schema = {
             enum: ['most-recent', 'launcher'],
             nullable: true,
         },
+        convexUrl: {
+            type: 'string',
+            nullable: true,
+        },
         android: {
             type: 'object',
             properties: {

@@ -2,7 +2,85 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const config_plugins_1 = require("expo/config-plugins");
 const pluginConfig_1 = require("./pluginConfig");
+const CONVEX_SWIFT_REPO_URL = 'https://github.com/get-convex/convex-swift';
+const CONVEX_SWIFT_REPO_NAME = 'convex-swift';
+const CONVEX_SWIFT_PRODUCT_NAME = 'ConvexMobile';
+const CONVEX_SWIFT_MIN_VERSION = '0.6.0';
 const pkg = require('expo-dev-launcher/package.json');
+/**
+ * Adds the `convex-swift` SPM package (product: ConvexMobile) to the Xcode project's main target.
+ *
+ * This follows the standard SPM integration pattern for Expo config plugins:
+ * 1. Add XCRemoteSwiftPackageReference section
+ * 2. Add XCSwiftPackageProductDependency section
+ * 3. Add package to PBXProject.packageReferences
+ * 4. Add PBXBuildFile entry for the framework
+ * 5. Add to PBXFrameworksBuildPhase.files
+ */
+const withConvexSPM = (config) => {
+    return (0, config_plugins_1.withXcodeProject)(config, (config) => {
+        const xcodeProject = config.modResults;
+        // Step 1: Add XCRemoteSwiftPackageReference
+        if (!xcodeProject.hash.project.objects['XCRemoteSwiftPackageReference']) {
+            xcodeProject.hash.project.objects['XCRemoteSwiftPackageReference'] = {};
+        }
+        const packageReferenceUUID = xcodeProject.generateUuid();
+        xcodeProject.hash.project.objects['XCRemoteSwiftPackageReference'][`${packageReferenceUUID} /* XCRemoteSwiftPackageReference "${CONVEX_SWIFT_REPO_NAME}" */`] = {
+            isa: 'XCRemoteSwiftPackageReference',
+            repositoryURL: CONVEX_SWIFT_REPO_URL,
+            requirement: {
+                kind: 'upToNextMajorVersion',
+                minimumVersion: CONVEX_SWIFT_MIN_VERSION,
+            },
+        };
+        // Step 2: Add XCSwiftPackageProductDependency
+        if (!xcodeProject.hash.project.objects['XCSwiftPackageProductDependency']) {
+            xcodeProject.hash.project.objects['XCSwiftPackageProductDependency'] = {};
+        }
+        const packageUUID = xcodeProject.generateUuid();
+        xcodeProject.hash.project.objects['XCSwiftPackageProductDependency'][`${packageUUID} /* ${CONVEX_SWIFT_PRODUCT_NAME} */`] = {
+            isa: 'XCSwiftPackageProductDependency',
+            package: `${packageReferenceUUID} /* XCRemoteSwiftPackageReference "${CONVEX_SWIFT_REPO_NAME}" */`,
+            productName: CONVEX_SWIFT_PRODUCT_NAME,
+        };
+        // Step 3: Add to PBXProject.packageReferences
+        const projectId = Object.keys(xcodeProject.hash.project.objects['PBXProject']).find((key) => !key.endsWith('_comment'));
+        if (projectId) {
+            if (!xcodeProject.hash.project.objects['PBXProject'][projectId]['packageReferences']) {
+                xcodeProject.hash.project.objects['PBXProject'][projectId]['packageReferences'] = [];
+            }
+            xcodeProject.hash.project.objects['PBXProject'][projectId]['packageReferences'].push(`${packageReferenceUUID} /* XCRemoteSwiftPackageReference "${CONVEX_SWIFT_REPO_NAME}" */`);
+        }
+        // Step 4: Add PBXBuildFile entry
+        const frameworkUUID = xcodeProject.generateUuid();
+        xcodeProject.hash.project.objects['PBXBuildFile'][`${frameworkUUID}_comment`] =
+            `${CONVEX_SWIFT_PRODUCT_NAME} in Frameworks`;
+        xcodeProject.hash.project.objects['PBXBuildFile'][frameworkUUID] = {
+            isa: 'PBXBuildFile',
+            productRef: packageUUID,
+            productRef_comment: CONVEX_SWIFT_PRODUCT_NAME,
+        };
+        // Step 5: Add to PBXFrameworksBuildPhase.files
+        const frameworksBuildPhaseId = Object.keys(xcodeProject.hash.project.objects['PBXFrameworksBuildPhase']).find((key) => !key.endsWith('_comment'));
+        if (frameworksBuildPhaseId) {
+            if (!xcodeProject.hash.project.objects['PBXFrameworksBuildPhase'][frameworksBuildPhaseId]['files']) {
+                xcodeProject.hash.project.objects['PBXFrameworksBuildPhase'][frameworksBuildPhaseId]['files'] = [];
+            }
+            xcodeProject.hash.project.objects['PBXFrameworksBuildPhase'][frameworksBuildPhaseId]['files'].push(`${frameworkUUID} /* ${CONVEX_SWIFT_PRODUCT_NAME} in Frameworks */`);
+        }
+        return config;
+    });
+};
+/**
+ * Injects the Convex deployment URL into Info.plist as `ConvexDeploymentUrl`.
+ * This allows the native Swift code to read the URL at runtime via Bundle.main.
+ */
+const withConvexInfoPlist = (config, convexUrl) => {
+    return (0, config_plugins_1.withInfoPlist)(config, (config) => {
+        config.modResults['ConvexDeploymentUrl'] = convexUrl;
+        return config;
+    });
+};
 /**
  * Adds a build phase script that strips dev-launcher-specific local network permission keys
  * from non-Debug builds. This keeps the keys in Debug builds (where dev-launcher is active)
@@ -115,5 +193,10 @@ exports.default = (0, config_plugins_1.createRunOncePlugin)((config, props = {})
     }
     config = withLocalNetworkPermission(config);
     config = withStripLocalNetworkKeysForRelease(config);
+    // Convex integration: add SPM dependency and Info.plist entry when convexUrl is set
+    if (props.convexUrl) {
+        config = withConvexSPM(config);
+        config = withConvexInfoPlist(config, props.convexUrl);
+    }
     return config;
 }, pkg.name, pkg.version);

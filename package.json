@@ -16,10 +16,15 @@
   "homepage": "https://docs.expo.dev",
   "dependencies": {
     "@expo/schema-utils": "^55.0.2",
+    "convex": "^1.32.0",
     "expo-dev-menu": "55.0.7",
     "expo-manifests": "~55.0.8"
   },
   "peerDependencies": {
     "expo": "*"
+  },
+  "devDependencies": {
+    "expo-module-scripts": "^5.0.8",
+    "typescript": "^5.9.3"
   }
 }

@@ -36,6 +36,14 @@ export type PluginConfigOptions = {
      * @deprecated use the `launchMode` property instead
      */
     launchModeExperimental?: 'most-recent' | 'launcher';
+    /**
+     * The Convex deployment URL. When set, the plugin will:
+     * 1. Add the `convex-swift` SPM package (product: ConvexMobile) to the Xcode project's main target
+     * 2. Inject `ConvexDeploymentUrl` into Info.plist
+     *
+     * @example 'https://your-deployment.convex.cloud'
+     */
+    convexUrl?: string;
 };
 /**
  * @ignore
