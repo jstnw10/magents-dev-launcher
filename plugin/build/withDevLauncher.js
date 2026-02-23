@@ -37,7 +37,7 @@ const config_plugins_1 = require("expo/config-plugins");
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const pluginConfig_1 = require("./pluginConfig");
-const pkg = require('expo-dev-launcher/package.json');
+const pkg = require('../../package.json');
 /**
  * Adds an SPM dependency on ConvexMobile (from convex-swift) to the main app target.
  * This replaces the previous CocoaPods-based approach with Swift Package Manager.
