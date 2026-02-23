@@ -29,12 +29,22 @@ Pod::Spec.new do |s|
       XCFW_DST="${PODS_CONFIGURATION_BUILD_DIR}/XCFrameworkIntermediates/convexmobile-rs"
       mkdir -p "$XCFW_DST"
       if [[ "$PLATFORM_NAME" == *"simulator"* ]]; then
-        rsync -a --delete "$XCFW_SRC/ios-arm64-simulator/" "$XCFW_DST/"
+        SRC_SLICE="$XCFW_SRC/ios-arm64-simulator"
       elif [[ "$PLATFORM_NAME" == "macosx" ]]; then
-        rsync -a --delete "$XCFW_SRC/macos-arm64/" "$XCFW_DST/"
+        SRC_SLICE="$XCFW_SRC/macos-arm64"
       else
-        rsync -a --delete "$XCFW_SRC/ios-arm64/" "$XCFW_DST/"
+        SRC_SLICE="$XCFW_SRC/ios-arm64"
       fi
+      rsync -a --delete "$SRC_SLICE/" "$XCFW_DST/"
+
+      # Copy FFI module headers into the pod's own build directory so dependent
+      # pods (e.g. expo-dev-launcher) can resolve the transitive 'convexmobileFFI'
+      # Clang module when they 'import ConvexMobile'. CocoaPods adds this directory
+      # to dependent pods' SWIFT_INCLUDE_PATHS (-I), enabling implicit module map
+      # discovery by the Swift compiler's embedded Clang.
+      mkdir -p "${CONFIGURATION_BUILD_DIR}"
+      cp "$SRC_SLICE/Headers/module.modulemap" "${CONFIGURATION_BUILD_DIR}/module.modulemap"
+      cp "$SRC_SLICE/Headers/convexmobileFFI.h" "${CONFIGURATION_BUILD_DIR}/convexmobileFFI.h"
     SCRIPT
     :execution_position => :before_compile,
   }
