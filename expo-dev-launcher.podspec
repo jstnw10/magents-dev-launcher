@@ -109,7 +109,7 @@ Pod::Spec.new do |s|
   s.dependency "expo-dev-menu"
   s.dependency "ExpoModulesCore"
   s.dependency "ReactAppDependencyProvider"
-  s.dependency 'ConvexMobile'
+
   add_dependency(s, "React-jsinspector", :framework_name => 'jsinspector_modern')
 
   unless defined?(install_modules_dependencies)

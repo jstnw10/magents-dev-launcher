@@ -2,13 +2,9 @@
 
 import SwiftUI
 
-#if canImport(ConvexMobile)
-
-// MARK: - Convex-enabled Magents tab
-
 struct MagentsTabView: View {
   @EnvironmentObject var viewModel: DevLauncherViewModel
-  @StateObject private var convex = ConvexService.shared
+  @StateObject private var store = MagentsDataStore.shared
   @State private var newItemText = ""
 
   var body: some View {
@@ -24,7 +20,7 @@ struct MagentsTabView: View {
       .padding(.top, 16)
       .padding(.bottom, 8)
 
-      if convex.isConnected {
+      if store.isConnected {
         connectedView
       } else {
         fallbackView
@@ -35,7 +31,7 @@ struct MagentsTabView: View {
     .background()
     #endif
     .onAppear {
-      convex.startItemsSubscription()
+      store.startSubscription()
     }
   }
 
@@ -59,7 +55,7 @@ struct MagentsTabView: View {
       .padding(.horizontal)
       .padding(.bottom, 12)
 
-      if convex.items.isEmpty {
+      if store.items.isEmpty {
         Spacer()
         VStack(spacing: 12) {
           Image(systemName: "tray")
@@ -75,10 +71,10 @@ struct MagentsTabView: View {
         Spacer()
       } else {
         List {
-          ForEach(convex.items) { item in
+          ForEach(store.items) { item in
             HStack {
               Button {
-                Task { try? await convex.toggleItem(id: item._id) }
+                Task { try? await store.toggleItem(id: item.id) }
               } label: {
                 Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
                   .foregroundColor(item.isCompleted ? .green : .secondary)
@@ -93,7 +89,7 @@ struct MagentsTabView: View {
               Spacer()
 
               Button(role: .destructive) {
-                Task { try? await convex.removeItem(id: item._id) }
+                Task { try? await store.removeItem(id: item.id) }
               } label: {
                 Image(systemName: "trash")
                   .font(.subheadline)
@@ -108,7 +104,7 @@ struct MagentsTabView: View {
     }
   }
 
-  // MARK: - Fallback: deployment URL not configured
+  // MARK: - Fallback: provider not registered
 
   private var fallbackView: some View {
     VStack(spacing: 16) {
@@ -134,48 +130,9 @@ struct MagentsTabView: View {
     guard !trimmed.isEmpty else { return }
     let text = trimmed
     newItemText = ""
-    Task { try? await convex.addItem(text: text) }
+    Task { try? await store.addItem(text: text) }
   }
 }
-
-#else
-
-// MARK: - Fallback when ConvexMobile is not available
-
-struct MagentsTabView: View {
-  @EnvironmentObject var viewModel: DevLauncherViewModel
-
-  var body: some View {
-    VStack(spacing: 0) {
-      Spacer()
-
-      VStack(spacing: 16) {
-        Image(systemName: "sparkles")
-          .resizable()
-          .frame(width: 56, height: 56)
-          .opacity(0.3)
-
-        Text("Magents")
-          .font(.largeTitle)
-          .fontWeight(.bold)
-
-        Text("To enable real-time features, set `convexUrl` in your Expo plugin config to add the Convex SDK.")
-          .font(.subheadline)
-          .foregroundColor(.secondary)
-          .multilineTextAlignment(.center)
-          .padding(.horizontal, 40)
-      }
-
-      Spacer()
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    #if os(tvOS)
-    .background()
-    #endif
-  }
-}
-
-#endif
 
 #Preview {
   MagentsTabView()
