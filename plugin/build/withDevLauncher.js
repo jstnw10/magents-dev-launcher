@@ -187,12 +187,17 @@ final class ConvexMagentsProvider: NSObject, MagentsDataProvider {
     func startSubscription() {
         guard let client else { return }
 
-        client.subscribe(to: "items:list", yielding: [ConvexItem].self)
+        client.subscribe(to: "agents:list", yielding: [ConvexAgent].self)
             .replaceError(with: [])
             .receive(on: DispatchQueue.main)
-            .sink { items in
-                MagentsDataStore.shared.update(items: items.map {
-                    MagentsItem(id: $0._id, text: $0.text, isCompleted: $0.isCompleted)
+            .sink { agents in
+                MagentsDataStore.shared.update(agents: agents.map {
+                    MagentsAgent(
+                        id: $0.id,
+                        name: $0.name,
+                        status: $0.status,
+                        parentId: $0.parentId
+                    )
                 })
             }
             .store(in: &cancellables)
@@ -200,25 +205,37 @@ final class ConvexMagentsProvider: NSObject, MagentsDataProvider {
 
     func addItem(text: String) async throws {
         guard let client else { return }
-        let _: String? = try await client.mutation("items:add", with: ["text": text])
+        let workspaceName = Bundle.main.bundleIdentifier ?? "expo.dev.launcher"
+        let deploymentUrl = Bundle.main.infoDictionary?["ConvexDeploymentUrl"] as? String ?? ""
+        let _: String? = try await client.mutation("agents:create", with: [
+            "id": UUID().uuidString,
+            "name": text,
+            "projectName": workspaceName,
+            "workspace": workspaceName,
+            "metroServerUrl": deploymentUrl,
+            "status": "idle",
+            "model": "unknown",
+            "provider": "convex-mobile"
+        ])
     }
 
     func toggleItem(id: String) async throws {
         guard let client else { return }
-        let _: String? = try await client.mutation("items:toggle", with: ["id": id])
+        let _: String? = try await client.mutation("agents:toggle", with: ["id": id])
     }
 
     func removeItem(id: String) async throws {
         guard let client else { return }
-        let _: String? = try await client.mutation("items:remove", with: ["id": id])
+        let _: Bool? = try await client.mutation("agents:remove", with: ["id": id])
     }
 }
 
 /// Mirrors the Convex document shape for decoding.
-private struct ConvexItem: Decodable {
-    let _id: String
-    let text: String
-    let isCompleted: Bool
+private struct ConvexAgent: Decodable {
+    let id: String
+    let name: String
+    let status: String
+    let parentId: String?
 }
 `;
             fs.mkdirSync(path.dirname(bridgePath), { recursive: true });

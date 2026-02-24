@@ -25,7 +25,7 @@ Replace the vendored CocoaPods wrapper (Option B) with a protocol-based bridge p
 │                                                     │
 │  MagentsDataStore (ObservableObject)                │
 │    .provider: MagentsDataProvider?                  │
-│    .items: [MagentsItem]                            │
+│    .agents: [MagentsAgent]                          │
 │    .isConnected: Bool                               │
 │                                                     │
 │  MagentsTabView → uses MagentsDataStore             │
@@ -51,8 +51,8 @@ Create two new files in `ios/SwiftUI/`:
 import Foundation
 import Combine
 
-/// A single data item displayed in the Magents tab.
-struct MagentsItem: Identifiable {
+/// A single agent displayed in the Magents tab.
+struct MagentsAgent: Identifiable {
     let id: String
     let text: String
     let isCompleted: Bool
@@ -62,7 +62,7 @@ struct MagentsItem: Identifiable {
 /// The implementation lives in the app target (not the pod).
 @MainActor
 protocol MagentsDataProvider: AnyObject {
-    /// Begin real-time subscription. Call `MagentsDataStore.shared.update(items:)` when data changes.
+    /// Begin real-time subscription. Call `MagentsDataStore.shared.update(agents:)` when data changes.
     func startSubscription()
     func addItem(text: String) async throws
     func toggleItem(id: String) async throws
@@ -83,7 +83,7 @@ import SwiftUI
 final class MagentsDataStore: ObservableObject {
     static let shared = MagentsDataStore()
 
-    @Published private(set) var items: [MagentsItem] = []
+    @Published private(set) var agents: [MagentsAgent] = []
     @Published private(set) var isConnected: Bool = false
 
     private(set) var provider: MagentsDataProvider?
@@ -94,9 +94,9 @@ final class MagentsDataStore: ObservableObject {
         shared.isConnected = true
     }
 
-    /// Called by the provider when items change.
-    func update(items: [MagentsItem]) {
-        self.items = items
+    /// Called by the provider when agents change.
+    func update(agents: [MagentsAgent]) {
+        self.agents = agents
     }
 
     // MARK: - Forwarded actions
@@ -125,13 +125,13 @@ Replace the current `#if canImport(ConvexMobile)` dual-implementation with a sin
 
 - Remove `#if canImport(ConvexMobile)` / `#else` / `#endif` guards entirely
 - Replace `@StateObject private var convex = ConvexService.shared` → `@StateObject private var store = MagentsDataStore.shared`
-- Replace `convex.items` → `store.items`
+- Replace `convex.items` → `store.agents`
 - Replace `convex.isConnected` → `store.isConnected`
 - Replace `convex.startItemsSubscription()` → `store.startSubscription()`
 - Replace `convex.addItem(text:)` → `store.addItem(text:)`
 - Replace `convex.toggleItem(id:)` → `store.toggleItem(id:)`
 - Replace `convex.removeItem(id:)` → `store.removeItem(id:)`
-- Replace `item._id` → `item.id` (since `MagentsItem.id` is a direct property)
+- Replace `item._id` → `item.id` (since `MagentsAgent.id` is a direct property)
 - Keep the fallback UI for when `store.isConnected == false` (inline, not behind `#if`)
 
 The `#else` fallback view (lines 141-178) becomes the `fallbackView` shown when `store.isConnected == false`. This is already mostly the pattern in the current Convex-enabled branch (lines 111-128).
@@ -191,12 +191,12 @@ final class ConvexMagentsProvider: MagentsDataProvider {
         guard let client else { return }
 
         // Subscribe and push results to MagentsDataStore
-        client.subscribe(to: "items:list", yielding: [ConvexItem].self)
+        client.subscribe(to: "agents:list", yielding: [ConvexAgent].self)
             .replaceError(with: [])
             .receive(on: DispatchQueue.main)
-            .sink { items in
-                MagentsDataStore.shared.update(items: items.map {
-                    MagentsItem(id: $0._id, text: $0.text, isCompleted: $0.isCompleted)
+            .sink { agents in
+                MagentsDataStore.shared.update(agents: agents.map {
+                    MagentsAgent(id: $0.id, text: $0.name, isCompleted: $0.status == "done")
                 })
             }
             .store(in: &cancellables)
@@ -204,25 +204,36 @@ final class ConvexMagentsProvider: MagentsDataProvider {
 
     func addItem(text: String) async throws {
         guard let client else { return }
-        let _: String? = try await client.mutation("items:add", with: ["text": text])
+        let workspaceName = Bundle.main.bundleIdentifier ?? "expo.dev.launcher"
+        let deploymentUrl = Bundle.main.infoDictionary?["ConvexDeploymentUrl"] as? String ?? ""
+        let _: String? = try await client.mutation("agents:create", with: [
+            "id": UUID().uuidString,
+            "name": text,
+            "projectName": workspaceName,
+            "workspace": workspaceName,
+            "metroServerUrl": deploymentUrl,
+            "status": "idle",
+            "model": "unknown",
+            "provider": "convex-mobile"
+        ])
     }
 
     func toggleItem(id: String) async throws {
         guard let client else { return }
-        let _: String? = try await client.mutation("items:toggle", with: ["id": id])
+        let _: String? = try await client.mutation("agents:toggle", with: ["id": id])
     }
 
     func removeItem(id: String) async throws {
         guard let client else { return }
-        let _: String? = try await client.mutation("items:remove", with: ["id": id])
+        let _: Bool? = try await client.mutation("agents:remove", with: ["id": id])
     }
 }
 
 /// Mirrors the Convex document shape for decoding.
-private struct ConvexItem: Decodable {
-    let _id: String
-    let text: String
-    let isCompleted: Bool
+private struct ConvexAgent: Decodable {
+    let id: String
+    let name: String
+    let status: String
 }
 
 /// Registers the Convex provider at app launch.
@@ -267,7 +278,7 @@ This removes 147MB of vendored binaries from the repo.
    - SPM dependency `convex-swift` appears in the Xcode project
    - `pod install` succeeds without `ConvexMobile` pod
    - Build succeeds
-   - Magents tab shows real-time items from Convex
+   - Magents tab shows real-time agents from Convex
 
 ## Files Changed Summary
 
