@@ -3,16 +3,18 @@
 import Foundation
 import Combine
 
-/// A single data item displayed in the Magents tab.
-public struct MagentsItem: Identifiable {
+/// A single agent displayed in the Magents tab.
+public struct MagentsAgent: Identifiable {
     public let id: String
-    public let text: String
-    public let isCompleted: Bool
+    public let name: String
+    public let status: String
+    public let parentId: String?
 
-    public init(id: String, text: String, isCompleted: Bool) {
+    public init(id: String, name: String, status: String, parentId: String? = nil) {
         self.id = id
-        self.text = text
-        self.isCompleted = isCompleted
+        self.name = name
+        self.status = status
+        self.parentId = parentId
     }
 }
 
@@ -20,10 +22,10 @@ public struct MagentsItem: Identifiable {
 /// The implementation lives in the app target (not the pod).
 @MainActor
 public protocol MagentsDataProvider: AnyObject {
-    /// Begin real-time subscription. Call `MagentsDataStore.shared.update(items:)` when data changes.
+    /// Begin real-time subscription. Call `MagentsDataStore.shared.update(agents:)` when data changes.
     func startSubscription()
+    /// Retained while existing UI flow still calls write operations.
     func addItem(text: String) async throws
     func toggleItem(id: String) async throws
     func removeItem(id: String) async throws
 }
-

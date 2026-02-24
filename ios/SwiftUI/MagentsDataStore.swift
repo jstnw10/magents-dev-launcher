@@ -10,7 +10,7 @@ import SwiftUI
 public final class MagentsDataStore: ObservableObject {
     public static let shared = MagentsDataStore()
 
-    @Published public private(set) var items: [MagentsItem] = []
+    @Published public private(set) var agents: [MagentsAgent] = []
     @Published public private(set) var isConnected: Bool = false
 
     public private(set) var provider: MagentsDataProvider?
@@ -21,9 +21,9 @@ public final class MagentsDataStore: ObservableObject {
         shared.isConnected = true
     }
 
-    /// Called by the provider when items change.
-    public func update(items: [MagentsItem]) {
-        self.items = items
+    /// Called by the provider when agents change.
+    public func update(agents: [MagentsAgent]) {
+        self.agents = agents
     }
 
     // MARK: - Forwarded actions
@@ -54,4 +54,3 @@ public final class MagentsDataStore: ObservableObject {
         try await provider?.removeItem(id: id)
     }
 }
-
