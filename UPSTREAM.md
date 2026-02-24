@@ -7,6 +7,7 @@ This repository is a customized fork of the `expo-dev-launcher` package from the
 - **Upstream repo**: https://github.com/expo/expo
 - **Commit hash**: `5a2ca2ea2380eedbafe0bbde7703d4f110ad7eaf`
 - **Package path**: `packages/expo-dev-launcher/`
+- **Local monorepo package path**: `packages/magents-dev-launcher/`
 - **SDK version**: 55
 - **Original version**: `55.0.8`
 - **Fork version**: `55.0.8-magents.1`
@@ -41,7 +42,7 @@ git clone --depth 1 https://github.com/expo/expo.git .
 # git fetch origin <new-commit-hash> --depth=1 && git checkout <new-commit-hash>
 
 # Copy the upstream files (excluding .git)
-rsync -av --exclude='.git' packages/expo-dev-launcher/ /path/to/magents-dev-launcher/
+rsync -av --exclude='.git' packages/expo-dev-launcher/ /path/to/magents-dev-launcher/packages/magents-dev-launcher/
 ```
 
 ### 4. Review and resolve conflicts
@@ -72,4 +73,3 @@ Update `package.json` version to increment the magents suffix (e.g., `55.0.8-mag
 git add -A
 git commit -m "chore: rebase on upstream expo-dev-launcher <new-commit-hash>"
 ```
-

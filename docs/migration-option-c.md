@@ -43,9 +43,9 @@ Replace the vendored CocoaPods wrapper (Option B) with a protocol-based bridge p
 
 ### Step 1: Define the protocol and data store in the pod
 
-Create two new files in `ios/SwiftUI/`:
+Create two new files in `packages/magents-dev-launcher/ios/SwiftUI/`:
 
-**`ios/SwiftUI/MagentsDataProvider.swift`** — The bridge protocol (no Convex dependency):
+**`packages/magents-dev-launcher/ios/SwiftUI/MagentsDataProvider.swift`** — The bridge protocol (no Convex dependency):
 
 ```swift
 import Foundation
@@ -70,7 +70,7 @@ protocol MagentsDataProvider: AnyObject {
 }
 ```
 
-**`ios/SwiftUI/MagentsDataStore.swift`** — The concrete ObservableObject that views consume:
+**`packages/magents-dev-launcher/ios/SwiftUI/MagentsDataStore.swift`** — The concrete ObservableObject that views consume:
 
 ```swift
 import Foundation
@@ -138,18 +138,18 @@ The `#else` fallback view (lines 141-178) becomes the `fallbackView` shown when 
 
 ### Step 3: Delete ConvexService.swift
 
-`ios/SwiftUI/ConvexService.swift` is replaced by the generated bridge file. Delete it entirely.
+`packages/magents-dev-launcher/ios/SwiftUI/ConvexService.swift` is replaced by the generated bridge file. Delete it entirely.
 
 ### Step 4: Update the podspec
 
-In `expo-dev-launcher.podspec`:
+In `packages/magents-dev-launcher/expo-dev-launcher.podspec`:
 - Remove `s.dependency 'ConvexMobile'` (line 112)
 
 That's it. No more CocoaPods dependency on ConvexMobile.
 
 ### Step 5: Update the config plugin
 
-In `plugin/src/withDevLauncher.ts`:
+In `packages/magents-dev-launcher/plugin/src/withDevLauncher.ts`:
 
 **Replace `withConvexPod`** (which appends a pod line to Podfile) **with two new functions:**
 
@@ -284,12 +284,12 @@ This removes 147MB of vendored binaries from the repo.
 
 | File | Change |
 |------|--------|
-| `ios/SwiftUI/MagentsDataProvider.swift` | **NEW** — Protocol definition |
-| `ios/SwiftUI/MagentsDataStore.swift` | **NEW** — Observable data store |
-| `ios/SwiftUI/MagentsTabView.swift` | **MODIFY** — Remove `#if canImport`, use `MagentsDataStore` |
-| `ios/SwiftUI/ConvexService.swift` | **DELETE** — Replaced by generated bridge |
-| `expo-dev-launcher.podspec` | **MODIFY** — Remove `s.dependency 'ConvexMobile'` |
-| `plugin/src/withDevLauncher.ts` | **MODIFY** — Replace `withConvexPod` with `withConvexSPM` + `withConvexBridge` |
+| `packages/magents-dev-launcher/ios/SwiftUI/MagentsDataProvider.swift` | **NEW** — Protocol definition |
+| `packages/magents-dev-launcher/ios/SwiftUI/MagentsDataStore.swift` | **NEW** — Observable data store |
+| `packages/magents-dev-launcher/ios/SwiftUI/MagentsTabView.swift` | **MODIFY** — Remove `#if canImport`, use `MagentsDataStore` |
+| `packages/magents-dev-launcher/ios/SwiftUI/ConvexService.swift` | **DELETE** — Replaced by generated bridge |
+| `packages/magents-dev-launcher/expo-dev-launcher.podspec` | **MODIFY** — Remove `s.dependency 'ConvexMobile'` |
+| `packages/magents-dev-launcher/plugin/src/withDevLauncher.ts` | **MODIFY** — Replace `withConvexPod` with `withConvexSPM` + `withConvexBridge` |
 | `vendor/ConvexMobile/` | **DELETE** — Entire directory (147MB) |
 
 ## Risks & Mitigations

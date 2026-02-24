@@ -1,10 +1,10 @@
 # expo-dev-launcher (magents fork)
 
-This is a customized fork of [`expo-dev-launcher`](https://github.com/expo/expo/tree/main/packages/expo-dev-launcher) from the Expo monorepo.
+This is a customized fork of [`expo-dev-launcher`](https://github.com/expo/expo/tree/main/packages/expo-dev-launcher) from the Expo monorepo, hosted in this repository as `packages/magents-dev-launcher`.
 
 ## About
 
-This fork is maintained as a standalone package extracted from the Expo monorepo at a specific commit. It allows magents-specific customizations to the Expo development launcher while tracking upstream changes.
+This fork is maintained in this monorepo at `packages/magents-dev-launcher`, extracted from the Expo monorepo at a specific commit. It allows magents-specific customizations to the Expo development launcher while tracking upstream changes.
 
 - **Upstream package**: `expo-dev-launcher@55.0.8`
 - **Fork version**: `55.0.8-magents.1`
