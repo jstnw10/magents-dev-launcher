@@ -30,7 +30,7 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/expo/expo.git",
-    "directory": "packages/expo-dev-launcher"
+    "directory": "packages/magents-dev-launcher"
   },
   "keywords": [
     "react-native"
