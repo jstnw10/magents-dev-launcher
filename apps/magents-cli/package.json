@@ -1,11 +1,21 @@
 {
   "name": "@magents/cli",
   "private": true,
+  "type": "module",
   "version": "0.0.0",
   "scripts": {
-    "build": "echo \"@magents/cli build scaffolded\"",
-    "test": "echo \"@magents/cli test scaffolded\"",
-    "lint": "echo \"@magents/cli lint scaffolded\"",
-    "typecheck": "echo \"@magents/cli typecheck scaffolded\""
+    "build": "echo \"@magents/cli build pending\"",
+    "start": "bun run src/cli.ts",
+    "test": "bun test",
+    "lint": "echo \"@magents/cli lint pending\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@magents/protocol": "workspace:*",
+    "@magents/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.2",
+    "typescript": "^5.9.3"
   }
 }
