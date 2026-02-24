@@ -26,6 +26,13 @@
     "plugins": [
       "expo-router",
       [
+        "./magents-dev-launcher.plugin.cjs",
+        {
+          "launchMode": "launcher",
+          "convexUrl": "https://gregarious-aardvark-924.convex.cloud/"
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "backgroundColor": "#208AEF",
