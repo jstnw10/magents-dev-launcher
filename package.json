@@ -24,7 +24,7 @@
     "lint:magents": "bun --filter @magents/app run lint",
     "lint:cli": "bun --filter @magents/cli run lint",
     "typecheck:launcher": "bun --filter @magents/dev-launcher run typecheck",
-    "typecheck:magents": "bun --filter @magents/app run typecheck",
+    "typecheck:magents": "bun --filter @magents/app typecheck",
     "typecheck:cli": "bun --filter @magents/cli run typecheck"
   },
   "repository": {
