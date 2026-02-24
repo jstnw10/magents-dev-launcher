@@ -4,9 +4,10 @@ import { ControlClient, CommandError } from "@magents/sdk";
 
 import { LocalControlTransport } from "./control-transport";
 import { SessionOrchestrator } from "./orchestrator";
+import { SystemPortAllocator } from "./port-allocator";
 import { FileSessionRegistry } from "./registry";
 import { CloudflareTunnelManager } from "./tunnel";
-import { DEFAULT_METRO_PORT, OrchestrationError } from "./types";
+import { OrchestrationError, type TunnelConfig } from "./types";
 import { GitWorktreeManager } from "./worktree";
 
 export interface CliDependencies {
@@ -49,6 +50,24 @@ function parsePort(args: readonly string[], flag: string) {
   return parsed;
 }
 
+function parseTunnelConfig(args: readonly string[]): TunnelConfig | undefined {
+  const tunnelName = parseValue(args, "--tunnel-name");
+  const domain = parseValue(args, "--domain");
+
+  if (tunnelName && domain) {
+    return { mode: "named", tunnelName, domain };
+  }
+
+  if (tunnelName || domain) {
+    throw new OrchestrationError(
+      "INVALID_ARGUMENT",
+      "Both --tunnel-name and --domain must be provided for named tunnel mode.",
+    );
+  }
+
+  return undefined;
+}
+
 function json(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
@@ -62,10 +81,12 @@ function requireValue(args: readonly string[], flag: string) {
 }
 
 function createDefaultDeps(): CliDependencies {
+  const registry = new FileSessionRegistry();
   const orchestrator = new SessionOrchestrator({
-    registry: new FileSessionRegistry(),
+    registry,
     worktrees: new GitWorktreeManager(),
     tunnels: new CloudflareTunnelManager(),
+    ports: new SystemPortAllocator(registry),
   });
   const controlClient = new ControlClient(new LocalControlTransport(orchestrator));
   return {
@@ -97,12 +118,14 @@ export async function runCli(argv: string[], deps: CliDependencies = createDefau
           const projectRoot = parseValue(args, "--project-root") ?? deps.cwd;
           const metroPort = parsePort(args, "--metro-port");
           const tunnelEnabled = parseBoolean(args, "--tunnel");
-          const resolvedMetroPort = metroPort ?? (await deps.orchestrator.pickNextMetroPort(DEFAULT_METRO_PORT));
-          const result = await deps.controlClient.createSession({
+          const tunnelConfig = parseTunnelConfig(args);
+          const resolvedMetroPort = metroPort ?? (await deps.orchestrator.allocatePort());
+          const result = await deps.orchestrator.createSession({
             label,
             projectRoot,
             metroPort: resolvedMetroPort,
             tunnelEnabled,
+            tunnelConfig,
           });
           deps.stdout(json(result));
           return 0;
@@ -163,9 +186,11 @@ export async function runCli(argv: string[], deps: CliDependencies = createDefau
         if (command === "attach") {
           const sessionId = requireValue(args, "--session-id");
           const publicUrl = parseValue(args, "--public-url");
+          const tunnelConfig = parseTunnelConfig(args);
           const result = await deps.orchestrator.attachTunnel({
             sessionId,
             publicUrl,
+            tunnelConfig,
           });
           deps.stdout(json(result));
           return 0;
@@ -177,6 +202,25 @@ export async function runCli(argv: string[], deps: CliDependencies = createDefau
             sessionId,
           });
           deps.stdout(json(result));
+          return 0;
+        }
+
+        if (command === "list") {
+          const tunnels = deps.orchestrator.listTunnels();
+          deps.stdout(json({ tunnels }));
+          return 0;
+        }
+
+        if (command === "status") {
+          const sessionId = requireValue(args, "--session-id");
+          const tunnel = deps.orchestrator.getTunnelStatus(sessionId);
+          if (!tunnel) {
+            throw new OrchestrationError(
+              "TUNNEL_NOT_FOUND",
+              `No active tunnel for session ${sessionId}.`,
+            );
+          }
+          deps.stdout(json({ tunnel }));
           return 0;
         }
 

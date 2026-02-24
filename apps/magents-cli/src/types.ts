@@ -38,21 +38,41 @@ export interface WorktreeManager {
   }): Promise<void>;
 }
 
+export type TunnelConfig =
+  | { mode: "quick" }
+  | { mode: "named"; tunnelName: string; domain: string };
+
+export interface TunnelInfo {
+  readonly sessionId: string;
+  readonly publicUrl: string;
+  readonly metroPort: number;
+  readonly config: TunnelConfig;
+}
+
 export interface TunnelManager {
   attach(input: {
     sessionId: SessionId;
     metroPort: number;
     publicUrl?: string;
+    tunnelConfig?: TunnelConfig;
   }): Promise<TunnelState>;
   detach(input: {
     sessionId: SessionId;
   }): Promise<TunnelState>;
+  list(): TunnelInfo[];
+  getStatus(sessionId: SessionId): TunnelInfo | undefined;
+}
+
+export interface PortAllocator {
+  allocate(): Promise<number>;
+  release(port: number): void;
 }
 
 export interface SessionOrchestratorOptions {
   readonly registry: SessionRegistry;
   readonly worktrees: WorktreeManager;
   readonly tunnels: TunnelManager;
+  readonly ports?: PortAllocator;
   readonly idFactory?: () => SessionId;
 }
 
