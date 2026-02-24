@@ -1,0 +1,11 @@
+{
+  "name": "@magents/app",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "echo \"@magents/app build scaffolded\"",
+    "test": "echo \"@magents/app test scaffolded\"",
+    "lint": "echo \"@magents/app lint scaffolded\"",
+    "typecheck": "echo \"@magents/app typecheck scaffolded\""
+  }
+}

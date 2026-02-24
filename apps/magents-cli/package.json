@@ -1,0 +1,11 @@
+{
+  "name": "@magents/cli",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "echo \"@magents/cli build scaffolded\"",
+    "test": "echo \"@magents/cli test scaffolded\"",
+    "lint": "echo \"@magents/cli lint scaffolded\"",
+    "typecheck": "echo \"@magents/cli typecheck scaffolded\""
+  }
+}

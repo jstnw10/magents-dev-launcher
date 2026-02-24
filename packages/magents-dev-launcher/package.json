@@ -1,0 +1,11 @@
+{
+  "name": "@magents/dev-launcher",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "echo \"@magents/dev-launcher build scaffolded\"",
+    "test": "echo \"@magents/dev-launcher test scaffolded\"",
+    "lint": "echo \"@magents/dev-launcher lint scaffolded\"",
+    "typecheck": "echo \"@magents/dev-launcher typecheck scaffolded\""
+  }
+}
