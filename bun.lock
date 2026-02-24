@@ -22,10 +22,6 @@
     "apps/magents": {
       "name": "@magents/app",
       "version": "0.0.0",
-      "dependencies": {
-        "@magents/dev-launcher": "workspace:*",
-        "@magents/sdk": "workspace:*",
-      },
     },
     "apps/magents-cli": {
       "name": "@magents/cli",
