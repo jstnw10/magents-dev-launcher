@@ -2,10 +2,25 @@
   "name": "@magents/app",
   "private": true,
   "version": "0.0.0",
+  "main": "index.ts",
   "scripts": {
-    "build": "echo \"@magents/app build scaffolded\"",
-    "test": "echo \"@magents/app test scaffolded\"",
-    "lint": "echo \"@magents/app lint scaffolded\"",
-    "typecheck": "echo \"@magents/app typecheck scaffolded\""
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "build": "expo export --platform all --output-dir dist",
+    "test": "echo \"No tests configured for @magents/app\"",
+    "lint": "echo \"No lint configured for @magents/app\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "expo": "~55.0.0-preview.12",
+    "expo-status-bar": "~55.0.3",
+    "react": "19.2.0",
+    "react-native": "0.83.2"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~5.9.2"
   }
 }
