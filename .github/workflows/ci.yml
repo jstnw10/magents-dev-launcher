@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      full_run:
+        description: "Run lint/test/typecheck for the full repository."
+        type: boolean
+        required: false
+        default: false
+      base_ref:
+        description: "Base ref for changed-target selection (default: origin/main)."
+        type: string
+        required: false
+
+jobs:
+  changed-target-ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Resolve comparison refs
+        id: refs
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            base="${{ github.event.before }}"
+          else
+            base="${{ inputs.base_ref }}"
+          fi
+
+          if [[ -z "${base}" || "${base}" == "0000000000000000000000000000000000000000" ]]; then
+            base="origin/main"
+          fi
+
+          full_run="false"
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            full_run="true"
+          fi
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.full_run }}" == "true" ]]; then
+            full_run="true"
+          fi
+
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+          echo "head=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "full_run=${full_run}" >> "$GITHUB_OUTPUT"
+
+      - name: Show changed target selection
+        env:
+          BASE_REF: ${{ steps.refs.outputs.base }}
+          HEAD_REF: ${{ steps.refs.outputs.head }}
+        run: ./scripts/ci/changed-targets.sh "$BASE_REF" "$HEAD_REF"
+
+      - name: Lint (changed targets)
+        env:
+          BASE_REF: ${{ steps.refs.outputs.base }}
+          HEAD_REF: ${{ steps.refs.outputs.head }}
+          FULL_RUN: ${{ steps.refs.outputs.full_run }}
+        run: ./scripts/ci/run-selective.sh lint "$BASE_REF" "$HEAD_REF"
+
+      - name: Test (changed targets)
+        env:
+          BASE_REF: ${{ steps.refs.outputs.base }}
+          HEAD_REF: ${{ steps.refs.outputs.head }}
+          FULL_RUN: ${{ steps.refs.outputs.full_run }}
+        run: ./scripts/ci/run-selective.sh test "$BASE_REF" "$HEAD_REF"
+
+      - name: Typecheck (changed targets, forced)
+        env:
+          BASE_REF: ${{ steps.refs.outputs.base }}
+          HEAD_REF: ${{ steps.refs.outputs.head }}
+          FULL_RUN: ${{ steps.refs.outputs.full_run }}
+          FORCE: "true"
+        run: ./scripts/ci/run-selective.sh typecheck "$BASE_REF" "$HEAD_REF"

@@ -1,0 +1,28 @@
+{
+  "name": "@magents/dev-launcher",
+  "version": "0.1.0",
+  "description": "Reusable launcher integration surface for magents apps.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "bun test",
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@magents/protocol": "workspace:*",
+    "@magents/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

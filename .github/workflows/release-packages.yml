@@ -1,0 +1,65 @@
+name: Release Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Package to release."
+        type: choice
+        required: true
+        default: "@magents/dev-launcher"
+        options:
+          - "@magents/dev-launcher"
+          - "@magents/protocol"
+          - "@magents/sdk"
+          - "all"
+      version:
+        description: "Optional semver version for a single package (example: 0.2.0)."
+        type: string
+        required: false
+      npm_tag:
+        description: "npm dist-tag to publish under."
+        type: string
+        required: false
+        default: "next"
+      dry_run:
+        description: "Use npm publish --dry-run."
+        type: boolean
+        required: false
+        default: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify and publish selected package(s)
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          NPM_TAG: ${{ inputs.npm_tag }}
+          VERSION: ${{ inputs.version }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: ./scripts/release/publish-package.sh "${{ inputs.package }}" "${{ inputs.version }}"

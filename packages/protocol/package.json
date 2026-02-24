@@ -1,0 +1,22 @@
+{
+  "name": "@magents/protocol",
+  "version": "0.1.0",
+  "description": "Shared transport-agnostic contracts for magents components.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,8 +1,32 @@
 {
   "name": "expo-dev-launcher",
+  "private": true,
+  "packageManager": "bun@1.3.5",
   "title": "Expo Development Launcher",
   "version": "55.0.8-magents.1",
   "description": "Pre-release version of the Expo development launcher package for testing.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "build:launcher": "bun --filter @magents/dev-launcher run build",
+    "build:magents": "bun --filter @magents/app run build",
+    "build:cli": "bun --filter @magents/cli run build",
+    "test:launcher": "bun --filter @magents/dev-launcher run test",
+    "test:magents": "bun --filter @magents/app run test",
+    "test:cli": "bun --filter @magents/cli run test",
+    "lint:launcher": "bun --filter @magents/dev-launcher run lint",
+    "lint:magents": "bun --filter @magents/app run lint",
+    "lint:cli": "bun --filter @magents/cli run lint",
+    "typecheck:launcher": "bun --filter @magents/dev-launcher run typecheck",
+    "typecheck:magents": "bun --filter @magents/app run typecheck",
+    "typecheck:cli": "bun --filter @magents/cli run typecheck"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/expo/expo.git",
@@ -25,6 +49,7 @@
   },
   "devDependencies": {
     "expo-module-scripts": "^5.0.8",
+    "turbo": "^2.5.8",
     "typescript": "^5.9.3"
   }
 }
