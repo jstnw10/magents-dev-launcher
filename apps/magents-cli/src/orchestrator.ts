@@ -6,6 +6,8 @@ import {
   OrchestrationError,
   type SessionOrchestratorOptions,
   type SessionRecord,
+  type TunnelConfig,
+  type TunnelInfo,
 } from "./types";
 
 function defaultSessionIdFactory() {
@@ -19,21 +21,25 @@ export class SessionOrchestrator {
     this.createSessionId = options.idFactory ?? defaultSessionIdFactory;
   }
 
-  async createSession(input: CommandMap["session.create"]["request"]) {
+  async createSession(
+    input: CommandMap["session.create"]["request"] & { tunnelConfig?: TunnelConfig },
+  ) {
+    const metroPort = input.metroPort ?? (await this.allocatePort());
+
     const sessions = await this.options.registry.load();
     const activePortTaken = sessions.some(
-      (session) => session.metroPort === input.metroPort && session.state !== "stopped"
+      (session) => session.metroPort === metroPort && session.state !== "stopped"
     );
 
     if (activePortTaken) {
-      throw new OrchestrationError("PORT_IN_USE", `Metro port ${input.metroPort} is already assigned.`);
+      throw new OrchestrationError("PORT_IN_USE", `Metro port ${metroPort} is already assigned.`);
     }
 
     const session: SessionRecord = {
       id: this.createSessionId(),
       label: input.label,
       projectRoot: input.projectRoot,
-      metroPort: input.metroPort,
+      metroPort,
       state: "running",
       tunnel: {
         connected: false,
@@ -45,6 +51,7 @@ export class SessionOrchestrator {
       session.tunnel = await this.options.tunnels.attach({
         sessionId: session.id,
         metroPort: session.metroPort,
+        tunnelConfig: input.tunnelConfig,
       });
     }
 
@@ -78,6 +85,7 @@ export class SessionOrchestrator {
     }
 
     session.state = "stopped";
+    this.options.ports?.release(session.metroPort);
     await this.options.registry.save(sessions);
 
     return {
@@ -158,7 +166,11 @@ export class SessionOrchestrator {
     };
   }
 
-  async attachTunnel(input: { sessionId: SessionId; publicUrl?: string }) {
+  async attachTunnel(input: {
+    sessionId: SessionId;
+    publicUrl?: string;
+    tunnelConfig?: TunnelConfig;
+  }) {
     const sessions = await this.options.registry.load();
     const session = sessions.find((candidate) => candidate.id === input.sessionId);
 
@@ -170,6 +182,7 @@ export class SessionOrchestrator {
       sessionId: session.id,
       metroPort: session.metroPort,
       publicUrl: input.publicUrl,
+      tunnelConfig: input.tunnelConfig,
     });
     await this.options.registry.save(sessions);
 
@@ -196,6 +209,21 @@ export class SessionOrchestrator {
       sessionId: session.id,
       tunnel: session.tunnel,
     };
+  }
+
+  listTunnels(): TunnelInfo[] {
+    return this.options.tunnels.list();
+  }
+
+  getTunnelStatus(sessionId: SessionId): TunnelInfo | undefined {
+    return this.options.tunnels.getStatus(sessionId);
+  }
+
+  async allocatePort(): Promise<number> {
+    if (this.options.ports) {
+      return this.options.ports.allocate();
+    }
+    return this.pickNextMetroPort();
   }
 
   async getSession(sessionId: SessionId) {
