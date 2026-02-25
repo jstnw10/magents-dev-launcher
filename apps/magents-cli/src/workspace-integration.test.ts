@@ -55,6 +55,8 @@ describe("Workspace Integration — full lifecycle", () => {
 
     // Initialize a real git repo so git rev-parse works
     execSync("git init", { cwd: repoDir, stdio: "pipe" });
+    execSync('git config user.email "test@test.com"', { cwd: repoDir, stdio: "pipe" });
+    execSync('git config user.name "Test"', { cwd: repoDir, stdio: "pipe" });
     execSync("git checkout -b main", { cwd: repoDir, stdio: "pipe" });
     await writeFile(path.join(repoDir, "README.md"), "# test\n");
     execSync("git add .", { cwd: repoDir, stdio: "pipe" });
@@ -340,6 +342,8 @@ describe("Workspace Integration — Convex sync", () => {
     await mkdir(repoDir, { recursive: true });
 
     execSync("git init", { cwd: repoDir, stdio: "pipe" });
+    execSync('git config user.email "test@test.com"', { cwd: repoDir, stdio: "pipe" });
+    execSync('git config user.name "Test"', { cwd: repoDir, stdio: "pipe" });
     execSync("git checkout -b main", { cwd: repoDir, stdio: "pipe" });
     await writeFile(path.join(repoDir, "README.md"), "# test\n");
     execSync("git add .", { cwd: repoDir, stdio: "pipe" });
