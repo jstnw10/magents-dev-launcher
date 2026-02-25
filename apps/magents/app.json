@@ -8,7 +8,8 @@
     "scheme": "magents",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "dev.jstnw.magents"
     },
     "android": {
       "adaptiveIcon": {
@@ -26,7 +27,7 @@
     "plugins": [
       "expo-router",
       [
-        "@magents/dev-launcher",
+        "expo-dev-launcher",
         {
           "launchMode": "launcher",
           "convexUrl": "https://gregarious-aardvark-924.convex.cloud/"
