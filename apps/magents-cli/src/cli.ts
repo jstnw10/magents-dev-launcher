@@ -3,6 +3,9 @@
 import { ControlClient, CommandError } from "@magents/sdk";
 
 import { LocalControlTransport } from "./control-transport";
+import { readGlobalConfig } from "./global-config";
+import { handleInit } from "./init";
+import { handleLink, createDefaultLinkDeps } from "./link";
 import { SessionOrchestrator } from "./orchestrator";
 import { SystemPortAllocator } from "./port-allocator";
 import { FileSessionRegistry } from "./registry";
@@ -84,7 +87,7 @@ function requireValue(args: readonly string[], flag: string) {
   return value;
 }
 
-function createDefaultDeps(): CliDependencies {
+async function createDefaultDeps(): Promise<CliDependencies> {
   const registry = new FileSessionRegistry();
   const worktrees = new GitWorktreeManager();
   const orchestrator = new SessionOrchestrator({
@@ -94,7 +97,8 @@ function createDefaultDeps(): CliDependencies {
     ports: new SystemPortAllocator(registry),
   });
   const controlClient = new ControlClient(new LocalControlTransport(orchestrator));
-  const convexUrl = process.env.CONVEX_URL ?? "";
+  const globalConfig = await readGlobalConfig();
+  const convexUrl = process.env.CONVEX_URL ?? globalConfig.convexUrl ?? "";
   const syncEnabled = convexUrl !== "";
   const sync = new ConvexWorkspaceSync({
     convexUrl,
@@ -116,9 +120,11 @@ function createDefaultDeps(): CliDependencies {
   };
 }
 
-export async function runCli(argv: string[], deps: CliDependencies = createDefaultDeps()) {
+export async function runCli(argv: string[], deps?: CliDependencies) {
+  const resolvedDeps = deps ?? (await createDefaultDeps());
+
   if (argv.length === 0) {
-    deps.stderr("Usage: magents <session|worktree|tunnel|workspace> <command> [options]");
+    resolvedDeps.stderr("Usage: magents <session|worktree|tunnel|workspace|init|link> <command> [options]");
     return 1;
   }
 
@@ -126,46 +132,58 @@ export async function runCli(argv: string[], deps: CliDependencies = createDefau
 
   try {
     switch (group) {
+      case "init": {
+        const initArgs = command ? [command, ...args] : args;
+        return await handleInit(initArgs, {
+          stdout: resolvedDeps.stdout,
+          stderr: resolvedDeps.stderr,
+        });
+      }
+      case "link": {
+        const linkArgs = command ? [command, ...args] : args;
+        const linkDeps = createDefaultLinkDeps();
+        return await handleLink(linkArgs, linkDeps);
+      }
       case "session": {
         if (command === "start") {
           const label = parseValue(args, "--label") ?? `session-${Date.now()}`;
-          const projectRoot = parseValue(args, "--project-root") ?? deps.cwd;
+          const projectRoot = parseValue(args, "--project-root") ?? resolvedDeps.cwd;
           const metroPort = parsePort(args, "--metro-port");
           const tunnelEnabled = parseBoolean(args, "--tunnel");
           const tunnelConfig = parseTunnelConfig(args);
-          const resolvedMetroPort = metroPort ?? (await deps.orchestrator.allocatePort());
-          const result = await deps.orchestrator.createSession({
+          const resolvedMetroPort = metroPort ?? (await resolvedDeps.orchestrator.allocatePort());
+          const result = await resolvedDeps.orchestrator.createSession({
             label,
             projectRoot,
             metroPort: resolvedMetroPort,
             tunnelEnabled,
             tunnelConfig,
           });
-          deps.stdout(json(result));
+          resolvedDeps.stdout(json(result));
           return 0;
         }
 
         if (command === "stop") {
           const sessionId = requireValue(args, "--session-id");
-          const result = await deps.controlClient.stopSession({
+          const result = await resolvedDeps.controlClient.stopSession({
             sessionId,
           });
-          deps.stdout(json(result));
+          resolvedDeps.stdout(json(result));
           return 0;
         }
 
         if (command === "list") {
-          const result = await deps.controlClient.listSessions();
-          deps.stdout(json(result));
+          const result = await resolvedDeps.controlClient.listSessions();
+          resolvedDeps.stdout(json(result));
           return 0;
         }
 
         if (command === "endpoint") {
           const sessionId = requireValue(args, "--session-id");
-          const result = await deps.controlClient.resolveEndpoint({
+          const result = await resolvedDeps.controlClient.resolveEndpoint({
             sessionId,
           });
-          deps.stdout(json(result));
+          resolvedDeps.stdout(json(result));
           return 0;
         }
 
@@ -176,21 +194,21 @@ export async function runCli(argv: string[], deps: CliDependencies = createDefau
           const sessionId = requireValue(args, "--session-id");
           const sourceRoot = parseValue(args, "--source-root");
           const requestedPath = parseValue(args, "--path");
-          const result = await deps.orchestrator.provisionWorktree({
+          const result = await resolvedDeps.orchestrator.provisionWorktree({
             sessionId,
             sourceRoot,
             path: requestedPath,
           });
-          deps.stdout(json(result));
+          resolvedDeps.stdout(json(result));
           return 0;
         }
 
         if (command === "cleanup") {
           const sessionId = requireValue(args, "--session-id");
-          const result = await deps.orchestrator.cleanupWorktree({
+          const result = await resolvedDeps.orchestrator.cleanupWorktree({
             sessionId,
           });
-          deps.stdout(json(result));
+          resolvedDeps.stdout(json(result));
           return 0;
         }
 
@@ -201,40 +219,40 @@ export async function runCli(argv: string[], deps: CliDependencies = createDefau
           const sessionId = requireValue(args, "--session-id");
           const publicUrl = parseValue(args, "--public-url");
           const tunnelConfig = parseTunnelConfig(args);
-          const result = await deps.orchestrator.attachTunnel({
+          const result = await resolvedDeps.orchestrator.attachTunnel({
             sessionId,
             publicUrl,
             tunnelConfig,
           });
-          deps.stdout(json(result));
+          resolvedDeps.stdout(json(result));
           return 0;
         }
 
         if (command === "detach") {
           const sessionId = requireValue(args, "--session-id");
-          const result = await deps.orchestrator.detachTunnel({
+          const result = await resolvedDeps.orchestrator.detachTunnel({
             sessionId,
           });
-          deps.stdout(json(result));
+          resolvedDeps.stdout(json(result));
           return 0;
         }
 
         if (command === "list") {
-          const tunnels = deps.orchestrator.listTunnels();
-          deps.stdout(json({ tunnels }));
+          const tunnels = resolvedDeps.orchestrator.listTunnels();
+          resolvedDeps.stdout(json({ tunnels }));
           return 0;
         }
 
         if (command === "status") {
           const sessionId = requireValue(args, "--session-id");
-          const tunnel = deps.orchestrator.getTunnelStatus(sessionId);
+          const tunnel = resolvedDeps.orchestrator.getTunnelStatus(sessionId);
           if (!tunnel) {
             throw new OrchestrationError(
               "TUNNEL_NOT_FOUND",
               `No active tunnel for session ${sessionId}.`,
             );
           }
-          deps.stdout(json({ tunnel }));
+          resolvedDeps.stdout(json({ tunnel }));
           return 0;
         }
 
@@ -246,44 +264,44 @@ export async function runCli(argv: string[], deps: CliDependencies = createDefau
           const title = parseValue(args, "--title");
           const baseRef = parseValue(args, "--base-ref");
           const setupCommand = parseValue(args, "--setup-command");
-          const result = await deps.workspaceManager.create({
+          const result = await resolvedDeps.workspaceManager.create({
             repositoryPath: repo,
             title,
             baseRef,
             setupScript: setupCommand,
           });
-          deps.stdout(json(result));
-          if (deps.syncEnabled) deps.stdout("Synced to cloud.");
+          resolvedDeps.stdout(json(result));
+          if (resolvedDeps.syncEnabled) resolvedDeps.stdout("Synced to cloud.");
           return 0;
         }
 
         if (command === "list") {
-          const workspaces = await deps.workspaceManager.list();
-          deps.stdout(json({ workspaces }));
+          const workspaces = await resolvedDeps.workspaceManager.list();
+          resolvedDeps.stdout(json({ workspaces }));
           return 0;
         }
 
         if (command === "status") {
           const id = requireValue(args, "--id");
-          const workspace = await deps.workspaceManager.status(id);
-          deps.stdout(json({ workspace }));
+          const workspace = await resolvedDeps.workspaceManager.status(id);
+          resolvedDeps.stdout(json({ workspace }));
           return 0;
         }
 
         if (command === "archive") {
           const id = requireValue(args, "--id");
-          const workspace = await deps.workspaceManager.archive(id);
-          deps.stdout(json({ workspace }));
-          if (deps.syncEnabled) deps.stdout("Synced to cloud.");
+          const workspace = await resolvedDeps.workspaceManager.archive(id);
+          resolvedDeps.stdout(json({ workspace }));
+          if (resolvedDeps.syncEnabled) resolvedDeps.stdout("Synced to cloud.");
           return 0;
         }
 
         if (command === "destroy") {
           const id = requireValue(args, "--id");
           const force = parseBoolean(args, "--force");
-          await deps.workspaceManager.destroy(id, { force });
-          deps.stdout(json({ destroyed: true, workspaceId: id }));
-          if (deps.syncEnabled) deps.stdout("Synced to cloud.");
+          await resolvedDeps.workspaceManager.destroy(id, { force });
+          resolvedDeps.stdout(json({ destroyed: true, workspaceId: id }));
+          if (resolvedDeps.syncEnabled) resolvedDeps.stdout("Synced to cloud.");
           return 0;
         }
 
@@ -293,20 +311,20 @@ export async function runCli(argv: string[], deps: CliDependencies = createDefau
         break;
     }
 
-    deps.stderr(`Unknown command: ${argv.join(" ")}`);
+    resolvedDeps.stderr(`Unknown command: ${argv.join(" ")}`);
     return 1;
   } catch (error) {
     if (error instanceof CommandError) {
-      deps.stderr(`${error.details.code}: ${error.details.message}`);
+      resolvedDeps.stderr(`${error.details.code}: ${error.details.message}`);
       return 1;
     }
 
     if (error instanceof OrchestrationError) {
-      deps.stderr(`${error.code}: ${error.message}`);
+      resolvedDeps.stderr(`${error.code}: ${error.message}`);
       return 1;
     }
 
-    deps.stderr(error instanceof Error ? error.message : "Unknown CLI failure.");
+    resolvedDeps.stderr(error instanceof Error ? error.message : "Unknown CLI failure.");
     return 1;
   }
 }
