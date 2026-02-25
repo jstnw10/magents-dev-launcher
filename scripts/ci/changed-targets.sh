@@ -90,7 +90,7 @@ if [[ "${target_cli}" -eq 1 ]]; then
   targets+=("@magents/cli")
 fi
 if [[ "${target_dev_launcher}" -eq 1 ]]; then
-  targets+=("@magents/dev-launcher")
+  targets+=("expo-dev-launcher")
 fi
 if [[ "${target_protocol}" -eq 1 ]]; then
   targets+=("@magents/protocol")

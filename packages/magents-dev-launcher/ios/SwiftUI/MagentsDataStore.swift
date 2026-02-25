@@ -10,7 +10,7 @@ import SwiftUI
 public final class MagentsDataStore: ObservableObject {
     public static let shared = MagentsDataStore()
 
-    @Published public private(set) var agents: [MagentsAgent] = []
+    @Published public private(set) var workspaces: [MagentsWorkspace] = []
     @Published public private(set) var isConnected: Bool = false
 
     public private(set) var provider: MagentsDataProvider?
@@ -21,12 +21,10 @@ public final class MagentsDataStore: ObservableObject {
         shared.isConnected = true
     }
 
-    /// Called by the provider when agents change.
-    public func update(agents: [MagentsAgent]) {
-        self.agents = agents
+    /// Called by the provider when workspaces change.
+    public func update(workspaces: [MagentsWorkspace]) {
+        self.workspaces = workspaces
     }
-
-    // MARK: - Forwarded actions
 
     /// Attempts to find and register a MagentsDataProvider from the app target.
     private func discoverProvider() {
@@ -40,17 +38,5 @@ public final class MagentsDataStore: ObservableObject {
     public func startSubscription() {
         discoverProvider()
         provider?.startSubscription()
-    }
-
-    public func addItem(text: String) async throws {
-        try await provider?.addItem(text: text)
-    }
-
-    public func toggleItem(id: String) async throws {
-        try await provider?.toggleItem(id: id)
-    }
-
-    public func removeItem(id: String) async throws {
-        try await provider?.removeItem(id: id)
     }
 }
