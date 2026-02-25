@@ -1,5 +1,4 @@
 import { describe, expect, it, beforeEach, afterEach, mock, spyOn } from "bun:test";
-import { execSync } from "node:child_process";
 import { mkdtemp, rm, mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -54,12 +53,13 @@ describe("Workspace Integration — full lifecycle", () => {
     await mkdir(repoDir, { recursive: true });
 
     // Initialize a real git repo so git rev-parse works
-    execSync("git init -b main", { cwd: repoDir, stdio: "pipe" });
-    execSync('git config user.email "test@test.com"', { cwd: repoDir, stdio: "pipe" });
-    execSync('git config user.name "Test"', { cwd: repoDir, stdio: "pipe" });
+    // Use Bun.spawnSync to avoid mock.module("node:child_process") pollution from other tests
+    Bun.spawnSync(["git", "init", "-b", "main"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(["git", "config", "user.email", "test@test.com"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(["git", "config", "user.name", "Test"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
     await writeFile(path.join(repoDir, "README.md"), "# test\n");
-    execSync("git add .", { cwd: repoDir, stdio: "pipe" });
-    execSync('git commit -m "init" --allow-empty', { cwd: repoDir, stdio: "pipe" });
+    Bun.spawnSync(["git", "add", "."], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(["git", "commit", "-m", "init", "--allow-empty"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
 
     process.env.MAGENTS_WORKSPACES_ROOT = workspacesRoot;
 
@@ -340,12 +340,12 @@ describe("Workspace Integration — Convex sync", () => {
     await mkdir(workspacesRoot, { recursive: true });
     await mkdir(repoDir, { recursive: true });
 
-    execSync("git init -b main", { cwd: repoDir, stdio: "pipe" });
-    execSync('git config user.email "test@test.com"', { cwd: repoDir, stdio: "pipe" });
-    execSync('git config user.name "Test"', { cwd: repoDir, stdio: "pipe" });
+    Bun.spawnSync(["git", "init", "-b", "main"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(["git", "config", "user.email", "test@test.com"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(["git", "config", "user.name", "Test"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
     await writeFile(path.join(repoDir, "README.md"), "# test\n");
-    execSync("git add .", { cwd: repoDir, stdio: "pipe" });
-    execSync('git commit -m "init" --allow-empty', { cwd: repoDir, stdio: "pipe" });
+    Bun.spawnSync(["git", "add", "."], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(["git", "commit", "-m", "init", "--allow-empty"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
 
     process.env.MAGENTS_WORKSPACES_ROOT = workspacesRoot;
     worktrees = new MockWorktreeManager();
