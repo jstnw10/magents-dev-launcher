@@ -5,6 +5,7 @@ import os from "node:os";
 export interface MagentsGlobalConfig {
   convexDeployKey?: string;
   convexUrl?: string;
+  opencodePath?: string;
 }
 
 export function getMagentsRoot(): string {

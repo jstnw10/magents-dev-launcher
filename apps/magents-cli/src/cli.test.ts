@@ -3,6 +3,8 @@ import { ControlClient } from "@magents/sdk";
 
 import { runCli } from "./cli";
 import { LocalControlTransport } from "./control-transport";
+import type { MagentsGlobalConfig } from "./global-config";
+import type { OpencodeResolverDeps } from "./opencode-resolver";
 import { SessionOrchestrator } from "./orchestrator";
 import { MockPortAllocator } from "./port-allocator";
 import type {
@@ -599,5 +601,160 @@ describe("CLI orchestration", () => {
     expect(endpointDisconnected.tunnel.connected).toBe(false);
     expect(afterCleanup?.projectRoot).toBe("/repo/source");
     expect(afterCleanup?.worktree).toBeUndefined();
+  });
+});
+
+// --- opencode command group tests ---
+
+function createOpencodeExecMock(opts: {
+  whichResult?: string;
+  version?: string;
+  helpOutput?: string;
+  whichError?: boolean;
+  versionError?: boolean;
+  helpError?: boolean;
+}) {
+  return async (cmd: string) => {
+    if (cmd === "which opencode") {
+      if (opts.whichError) throw new Error("command not found");
+      return { stdout: opts.whichResult ?? "/usr/local/bin/opencode\n", stderr: "" };
+    }
+    if (cmd.endsWith("--version")) {
+      if (opts.versionError) throw new Error("command failed");
+      return { stdout: opts.version ?? "1.2.14\n", stderr: "" };
+    }
+    if (cmd.endsWith("--help")) {
+      if (opts.helpError) throw new Error("command failed");
+      return { stdout: opts.helpOutput ?? "Usage: opencode [options]\n", stderr: "" };
+    }
+    return { stdout: "", stderr: "" };
+  };
+}
+
+function createOpencodeResolverDeps(
+  overrides: Partial<OpencodeResolverDeps> = {},
+): OpencodeResolverDeps {
+  let storedConfig: MagentsGlobalConfig = {};
+  return {
+    exec: createOpencodeExecMock({}),
+    readConfig: async () => storedConfig,
+    writeConfig: async (config) => {
+      storedConfig = config;
+    },
+    ...overrides,
+  };
+}
+
+function setupTestCliWithOpencode(resolverDeps: Partial<OpencodeResolverDeps> = {}) {
+  const base = setupTestCli();
+  const opencodeResolverDeps = createOpencodeResolverDeps(resolverDeps);
+  return {
+    ...base,
+    deps: { ...base.deps, opencodeResolverDeps },
+  };
+}
+
+describe("CLI opencode commands", () => {
+  it("opencode status succeeds with auto-detected path", async () => {
+    const exec = createOpencodeExecMock({ whichResult: "/usr/local/bin/opencode\n", version: "1.2.14\n" });
+    const { deps, output, errors } = setupTestCliWithOpencode({ exec });
+
+    const code = await runCli(["opencode", "status"], deps);
+
+    expect(code).toBe(0);
+    expect(errors).toHaveLength(0);
+    const result = JSON.parse(output[0]);
+    expect(result.path).toBe("/usr/local/bin/opencode");
+    expect(result.version).toBe("1.2.14");
+    expect(result.source).toBe("auto-detected");
+  });
+
+  it("opencode status succeeds with config path", async () => {
+    const exec = createOpencodeExecMock({ version: "2.0.0\n" });
+    const { deps, output, errors } = setupTestCliWithOpencode({
+      exec,
+      readConfig: async () => ({ opencodePath: "/custom/opencode" }),
+    });
+
+    const code = await runCli(["opencode", "status"], deps);
+
+    expect(code).toBe(0);
+    expect(errors).toHaveLength(0);
+    const result = JSON.parse(output[0]);
+    expect(result.path).toBe("/custom/opencode");
+    expect(result.version).toBe("2.0.0");
+    expect(result.source).toBe("config");
+  });
+
+  it("opencode status fails when not found", async () => {
+    const exec = createOpencodeExecMock({ whichError: true });
+    const { deps, errors } = setupTestCliWithOpencode({ exec });
+
+    const code = await runCli(["opencode", "status"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("OPENCODE_NOT_FOUND");
+  });
+
+  it("opencode set-path --path <valid> succeeds", async () => {
+    let savedConfig: MagentsGlobalConfig = {};
+    const exec = createOpencodeExecMock({ version: "1.5.0\n" });
+    const { deps, output, errors } = setupTestCliWithOpencode({
+      exec,
+      writeConfig: async (config) => {
+        savedConfig = config;
+      },
+    });
+
+    const code = await runCli(["opencode", "set-path", "--path", "/opt/opencode"], deps);
+
+    expect(code).toBe(0);
+    expect(errors).toHaveLength(0);
+    const result = JSON.parse(output[0]);
+    expect(result.path).toBe("/opt/opencode");
+    expect(result.version).toBe("1.5.0");
+    expect(result.saved).toBe(true);
+    expect(savedConfig.opencodePath).toBe("/opt/opencode");
+  });
+
+  it("opencode set-path without --path flag errors", async () => {
+    const { deps, errors } = setupTestCliWithOpencode();
+
+    const code = await runCli(["opencode", "set-path"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("Missing required flag --path");
+  });
+
+  it("opencode detect succeeds", async () => {
+    const exec = createOpencodeExecMock({ whichResult: "/usr/bin/opencode\n", version: "1.0.0\n" });
+    const { deps, output, errors } = setupTestCliWithOpencode({ exec });
+
+    const code = await runCli(["opencode", "detect"], deps);
+
+    expect(code).toBe(0);
+    expect(errors).toHaveLength(0);
+    const result = JSON.parse(output[0]);
+    expect(result.path).toBe("/usr/bin/opencode");
+    expect(result.version).toBe("1.0.0");
+  });
+
+  it("opencode detect fails when not installed", async () => {
+    const exec = createOpencodeExecMock({ whichError: true });
+    const { deps, errors } = setupTestCliWithOpencode({ exec });
+
+    const code = await runCli(["opencode", "detect"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("OPENCODE_NOT_FOUND");
+  });
+
+  it("unknown opencode subcommand errors", async () => {
+    const { deps, errors } = setupTestCliWithOpencode();
+
+    const code = await runCli(["opencode", "foobar"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("Unknown command: opencode foobar");
   });
 });

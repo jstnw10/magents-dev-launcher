@@ -6,6 +6,13 @@ import { LocalControlTransport } from "./control-transport";
 import { readGlobalConfig } from "./global-config";
 import { handleInit } from "./init";
 import { handleLink, createDefaultLinkDeps } from "./link";
+import {
+  resolveOpencodePath,
+  setOpencodePath,
+  detectOpencodePath,
+  getOpencodeVersion,
+  type OpencodeResolverDeps,
+} from "./opencode-resolver";
 import { SessionOrchestrator } from "./orchestrator";
 import { SystemPortAllocator } from "./port-allocator";
 import { FileSessionRegistry } from "./registry";
@@ -23,6 +30,7 @@ export interface CliDependencies {
   readonly cwd: string;
   readonly stdout: (line: string) => void;
   readonly stderr: (line: string) => void;
+  readonly opencodeResolverDeps?: Partial<OpencodeResolverDeps>;
 }
 
 function parseValue(args: readonly string[], flag: string) {
@@ -124,7 +132,7 @@ export async function runCli(argv: string[], deps?: CliDependencies) {
   const resolvedDeps = deps ?? (await createDefaultDeps());
 
   if (argv.length === 0) {
-    resolvedDeps.stderr("Usage: magents <session|worktree|tunnel|workspace|init|link> <command> [options]");
+    resolvedDeps.stderr("Usage: magents <session|worktree|tunnel|workspace|opencode|init|link> <command> [options]");
     return 1;
   }
 
@@ -302,6 +310,37 @@ export async function runCli(argv: string[], deps?: CliDependencies) {
           await resolvedDeps.workspaceManager.destroy(id, { force });
           resolvedDeps.stdout(json({ destroyed: true, workspaceId: id }));
           if (resolvedDeps.syncEnabled) resolvedDeps.stdout("Synced to cloud.");
+          return 0;
+        }
+
+        break;
+      }
+      case "opencode": {
+        const resolverDeps = resolvedDeps.opencodeResolverDeps;
+
+        if (command === "status") {
+          const result = await resolveOpencodePath(resolverDeps);
+          resolvedDeps.stdout(json(result));
+          return 0;
+        }
+
+        if (command === "set-path") {
+          const binaryPath = requireValue(args, "--path");
+          const result = await setOpencodePath(binaryPath, resolverDeps);
+          resolvedDeps.stdout(json({ ...result, saved: true }));
+          return 0;
+        }
+
+        if (command === "detect") {
+          const detected = await detectOpencodePath(resolverDeps);
+          if (!detected) {
+            throw new OrchestrationError(
+              "OPENCODE_NOT_FOUND",
+              "opencode is not installed or not found in PATH.",
+            );
+          }
+          const version = await getOpencodeVersion(detected, resolverDeps);
+          resolvedDeps.stdout(json({ path: detected, version }));
           return 0;
         }
 
