@@ -1,13 +1,9 @@
-import { exec as cpExec } from "node:child_process";
-import { promisify } from "node:util";
 import {
   readGlobalConfig,
   writeGlobalConfig,
   type MagentsGlobalConfig,
 } from "./global-config";
 import { OrchestrationError } from "./types";
-
-const execAsync = promisify(cpExec);
 
 export interface OpencodeResolverDeps {
   exec: (cmd: string) => Promise<{ stdout: string; stderr: string }>;
@@ -23,7 +19,16 @@ export interface ResolvedOpencode {
 
 function defaultDeps(): OpencodeResolverDeps {
   return {
-    exec: (cmd: string) => execAsync(cmd),
+    exec: async (cmd: string) => {
+      const proc = Bun.spawn(["sh", "-c", cmd], { stdout: "pipe", stderr: "pipe" });
+      const exitCode = await proc.exited;
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      if (exitCode !== 0) {
+        throw new Error(stderr || `Command failed with exit code ${exitCode}`);
+      }
+      return { stdout, stderr };
+    },
     readConfig: readGlobalConfig,
     writeConfig: writeGlobalConfig,
   };

@@ -1,7 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
 
 import { readGlobalConfig, writeGlobalConfig } from "./global-config";
 import { handleInit, validateDeployKey, redactDeployKey, validateConvexUrlFormat, deriveUrlFromDeployment } from "./init";
@@ -74,7 +73,7 @@ describe("handleInit --status", () => {
   const originalEnv = process.env.MAGENTS_HOME;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "init-status-"));
+    tmpDir = await mkdtemp(path.join(Bun.env.TMPDIR ?? "/tmp", "init-status-"));
     process.env.MAGENTS_HOME = tmpDir;
   });
 
@@ -128,7 +127,7 @@ describe("handleInit --deploy-key --url", () => {
   const originalEnv = process.env.MAGENTS_HOME;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "init-setup-"));
+    tmpDir = await mkdtemp(path.join(Bun.env.TMPDIR ?? "/tmp", "init-setup-"));
     process.env.MAGENTS_HOME = tmpDir;
   });
 
@@ -324,7 +323,7 @@ describe("handleInit interactive mode", () => {
   const originalEnv = process.env.MAGENTS_HOME;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "init-interactive-"));
+    tmpDir = await mkdtemp(path.join(Bun.env.TMPDIR ?? "/tmp", "init-interactive-"));
     process.env.MAGENTS_HOME = tmpDir;
   });
 

@@ -1,6 +1,5 @@
-import { readFile, writeFile, mkdir, readdir, access } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
 
 import type { WorkspaceConfig, PackageManager } from "./types";
 
@@ -31,7 +30,7 @@ const ANIMALS = [
 ];
 
 export function getWorkspacesRoot(): string {
-  return process.env.MAGENTS_WORKSPACES_ROOT ?? path.join(os.homedir(), ".magents", "workspaces");
+  return process.env.MAGENTS_WORKSPACES_ROOT ?? path.join(Bun.env.HOME ?? "/tmp", ".magents", "workspaces");
 }
 
 export function generateWorkspaceId(existingIds?: Set<string>): string {
@@ -52,15 +51,14 @@ export function generateWorkspaceId(existingIds?: Set<string>): string {
 
 export async function readWorkspaceConfig(workspacePath: string): Promise<WorkspaceConfig> {
   const configPath = path.join(workspacePath, ".workspace", "workspace.json");
-  const raw = await readFile(configPath, "utf-8");
-  return JSON.parse(raw) as WorkspaceConfig;
+  return await Bun.file(configPath).json() as WorkspaceConfig;
 }
 
 export async function writeWorkspaceConfig(workspacePath: string, config: WorkspaceConfig): Promise<void> {
   const dotWorkspace = path.join(workspacePath, ".workspace");
   await mkdir(dotWorkspace, { recursive: true });
   const configPath = path.join(dotWorkspace, "workspace.json");
-  await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  await Bun.write(configPath, JSON.stringify(config, null, 2) + "\n");
 }
 
 export async function initWorkspaceDir(workspacePath: string): Promise<void> {
@@ -110,11 +108,8 @@ export async function detectPackageManager(repoPath: string): Promise<PackageMan
   ];
 
   for (const [lockFile, pm] of lockFiles) {
-    try {
-      await access(path.join(repoPath, lockFile));
+    if (await Bun.file(path.join(repoPath, lockFile)).exists()) {
       return pm;
-    } catch {
-      // Lock file not found, try next
     }
   }
   return "npm";

@@ -1,66 +1,75 @@
-import { describe, expect, it, mock, beforeEach } from "bun:test";
+import { describe, expect, it, mock, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 
-let mockExecSync: ReturnType<typeof mock>;
+import { GitWorktreeManager, parsePorcelainOutput } from "./worktree";
 
-mock.module("node:child_process", () => {
-  mockExecSync = mock();
-  return { execSync: mockExecSync };
-});
+// Helper to create a successful spawnSync result
+function okResult(stdout = ""): any {
+  return {
+    success: true,
+    exitCode: 0,
+    stdout: Buffer.from(stdout),
+    stderr: Buffer.from(""),
+  };
+}
 
-// Import AFTER mocking
-const { GitWorktreeManager, parsePorcelainOutput } = await import("./worktree");
+// Helper to create a failed spawnSync result
+function failResult(stderr = ""): any {
+  return {
+    success: false,
+    exitCode: 1,
+    stdout: Buffer.from(""),
+    stderr: Buffer.from(stderr),
+  };
+}
+
+// Helper: check if an args array contains a substring in any element
+function argsContain(args: string[], needle: string): boolean {
+  return args.some((a) => a.includes(needle));
+}
 
 describe("GitWorktreeManager", () => {
-  let manager: InstanceType<typeof GitWorktreeManager>;
+  let manager: GitWorktreeManager;
+  let mockSpawnSync: ReturnType<typeof mock>;
+  const originalSpawnSync = Bun.spawnSync;
 
   beforeEach(() => {
     manager = new GitWorktreeManager();
-    mockExecSync.mockReset();
-    // Default: git rev-parse succeeds (valid git repo)
-    mockExecSync.mockImplementation((cmd: string) => {
-      if (typeof cmd === "string" && cmd.includes("rev-parse")) {
-        return Buffer.from(".git\n");
+    mockSpawnSync = mock((args: string[], _opts?: any) => {
+      // Default: git rev-parse succeeds (valid git repo)
+      if (argsContain(args, "rev-parse")) {
+        return okResult(".git\n");
       }
-      return Buffer.from("");
+      return okResult();
     });
+    Bun.spawnSync = mockSpawnSync as any;
+  });
+
+  afterEach(() => {
+    Bun.spawnSync = originalSpawnSync;
   });
 
   describe("provision", () => {
     it("runs git worktree add with correct arguments", async () => {
-      mockExecSync.mockImplementation((cmd: string) => {
-        if (cmd.includes("rev-parse")) return Buffer.from(".git\n");
-        if (cmd.includes("worktree add")) return Buffer.from("");
-        return Buffer.from("");
-      });
-
       const result = await manager.provision({
         sessionId: "sess-abc",
         sourceRoot: "/repo",
       });
 
       expect(result).toBe("/repo/.magents/sess-abc");
-      expect(mockExecSync).toHaveBeenCalledWith(
-        expect.stringContaining("worktree add"),
-        expect.objectContaining({ cwd: "/repo", stdio: "pipe" }),
+
+      // Find the worktree add call
+      const addCall = mockSpawnSync.mock.calls.find(
+        (c: any[]) => Array.isArray(c[0]) && c[0].includes("worktree") && c[0].includes("add"),
       );
-      // Should include the branch name and base ref
-      const addCall = mockExecSync.mock.calls.find(
-        (c: string[]) => typeof c[0] === "string" && c[0].includes("worktree add"),
-      );
+      expect(addCall).toBeTruthy();
       expect(addCall![0]).toContain("magents/sess-abc");
       expect(addCall![0]).toContain("main");
+      expect(addCall![1]).toEqual(expect.objectContaining({ cwd: "/repo" }));
     });
 
     it("uses requestedPath when provided", async () => {
-      mockExecSync.mockImplementation((cmd: string) => {
-        if (cmd.includes("rev-parse")) return Buffer.from(".git\n");
-        if (cmd.includes("worktree add")) return Buffer.from("");
-        return Buffer.from("");
-      });
-
       const result = await manager.provision({
         sessionId: "sess-custom",
         sourceRoot: "/repo",
@@ -71,33 +80,25 @@ describe("GitWorktreeManager", () => {
     });
 
     it("uses custom baseRef when provided", async () => {
-      mockExecSync.mockImplementation((cmd: string) => {
-        if (cmd.includes("rev-parse")) return Buffer.from(".git\n");
-        if (cmd.includes("worktree add")) return Buffer.from("");
-        return Buffer.from("");
-      });
-
       await manager.provision({
         sessionId: "sess-dev",
         sourceRoot: "/repo",
         baseRef: "develop",
       });
 
-      const addCall = mockExecSync.mock.calls.find(
-        (c: string[]) => typeof c[0] === "string" && c[0].includes("worktree add"),
+      const addCall = mockSpawnSync.mock.calls.find(
+        (c: any[]) => Array.isArray(c[0]) && c[0].includes("worktree") && c[0].includes("add"),
       );
       expect(addCall![0]).toContain("develop");
     });
 
     it("throws WORKTREE_BRANCH_EXISTS when branch exists", async () => {
-      mockExecSync.mockImplementation((cmd: string) => {
-        if (cmd.includes("rev-parse")) return Buffer.from(".git\n");
-        if (cmd.includes("worktree add")) {
-          const err = new Error("git error") as Error & { stderr: Buffer };
-          err.stderr = Buffer.from("fatal: a branch named 'magents/sess-dup' already exists");
-          throw err;
+      mockSpawnSync.mockImplementation((args: string[], _opts?: any) => {
+        if (argsContain(args, "rev-parse")) return okResult(".git\n");
+        if (argsContain(args, "worktree") && argsContain(args, "add")) {
+          return failResult("fatal: a branch named 'magents/sess-dup' already exists");
         }
-        return Buffer.from("");
+        return okResult();
       });
 
       await expect(
@@ -106,14 +107,12 @@ describe("GitWorktreeManager", () => {
     });
 
     it("throws WORKTREE_PATH_EXISTS when path is already a worktree", async () => {
-      mockExecSync.mockImplementation((cmd: string) => {
-        if (cmd.includes("rev-parse")) return Buffer.from(".git\n");
-        if (cmd.includes("worktree add")) {
-          const err = new Error("git error") as Error & { stderr: Buffer };
-          err.stderr = Buffer.from("fatal: '/repo/.magents/sess-x' is a working tree");
-          throw err;
+      mockSpawnSync.mockImplementation((args: string[], _opts?: any) => {
+        if (argsContain(args, "rev-parse")) return okResult(".git\n");
+        if (argsContain(args, "worktree") && argsContain(args, "add")) {
+          return failResult("fatal: '/repo/.magents/sess-x' is a working tree");
         }
-        return Buffer.from("");
+        return okResult();
       });
 
       await expect(
@@ -122,11 +121,11 @@ describe("GitWorktreeManager", () => {
     });
 
     it("throws NOT_A_GIT_REPO when sourceRoot is not a git repo", async () => {
-      mockExecSync.mockImplementation((cmd: string) => {
-        if (cmd.includes("rev-parse")) {
-          throw new Error("not a git repository");
+      mockSpawnSync.mockImplementation((args: string[], _opts?: any) => {
+        if (argsContain(args, "rev-parse")) {
+          return failResult("fatal: not a git repository");
         }
-        return Buffer.from("");
+        return okResult();
       });
 
       await expect(
@@ -137,53 +136,41 @@ describe("GitWorktreeManager", () => {
 
   describe("cleanup", () => {
     it("runs git worktree remove", async () => {
-      mockExecSync.mockImplementation((cmd: string) => {
-        if (cmd.includes("rev-parse")) return Buffer.from(".git\n");
-        if (cmd.includes("worktree remove")) return Buffer.from("");
-        return Buffer.from("");
-      });
-
       await manager.cleanup({
         sourceRoot: "/repo",
         path: "/repo/.magents/sess-rm",
       });
 
-      const rmCall = mockExecSync.mock.calls.find(
-        (c: string[]) => typeof c[0] === "string" && c[0].includes("worktree remove"),
+      const rmCall = mockSpawnSync.mock.calls.find(
+        (c: any[]) => Array.isArray(c[0]) && c[0].includes("worktree") && c[0].includes("remove"),
       );
       expect(rmCall).toBeTruthy();
       expect(rmCall![0]).toContain("/repo/.magents/sess-rm");
     });
 
     it("passes --force flag when force is true", async () => {
-      mockExecSync.mockImplementation((cmd: string) => {
-        if (cmd.includes("rev-parse")) return Buffer.from(".git\n");
-        if (cmd.includes("worktree remove")) return Buffer.from("");
-        return Buffer.from("");
-      });
-
       await manager.cleanup({
         sourceRoot: "/repo",
         path: "/repo/.magents/sess-force",
         force: true,
       });
 
-      const rmCall = mockExecSync.mock.calls.find(
-        (c: string[]) => typeof c[0] === "string" && c[0].includes("worktree remove"),
+      const rmCall = mockSpawnSync.mock.calls.find(
+        (c: any[]) => Array.isArray(c[0]) && c[0].includes("worktree") && c[0].includes("remove"),
       );
       expect(rmCall![0]).toContain("--force");
     });
 
     it("prunes when worktree was already deleted manually", async () => {
-      mockExecSync.mockImplementation((cmd: string) => {
-        if (cmd.includes("rev-parse")) return Buffer.from(".git\n");
-        if (cmd.includes("worktree remove")) {
-          const err = new Error("git error") as Error & { stderr: Buffer };
-          err.stderr = Buffer.from("fatal: No such file or directory");
-          throw err;
+      mockSpawnSync.mockImplementation((args: string[], _opts?: any) => {
+        if (argsContain(args, "rev-parse")) return okResult(".git\n");
+        if (argsContain(args, "worktree") && argsContain(args, "remove")) {
+          return failResult("fatal: No such file or directory");
         }
-        if (cmd.includes("worktree prune")) return Buffer.from("");
-        return Buffer.from("");
+        if (argsContain(args, "worktree") && argsContain(args, "prune")) {
+          return okResult();
+        }
+        return okResult();
       });
 
       // Should not throw — gracefully prunes
@@ -192,23 +179,21 @@ describe("GitWorktreeManager", () => {
         path: "/repo/.magents/sess-gone",
       });
 
-      const pruneCall = mockExecSync.mock.calls.find(
-        (c: string[]) => typeof c[0] === "string" && c[0].includes("worktree prune"),
+      const pruneCall = mockSpawnSync.mock.calls.find(
+        (c: any[]) => Array.isArray(c[0]) && c[0].includes("worktree") && c[0].includes("prune"),
       );
       expect(pruneCall).toBeTruthy();
     });
 
     it("throws WORKTREE_DIRTY when worktree has uncommitted changes", async () => {
-      mockExecSync.mockImplementation((cmd: string) => {
-        if (cmd.includes("rev-parse")) return Buffer.from(".git\n");
-        if (cmd.includes("worktree remove")) {
-          const err = new Error("git error") as Error & { stderr: Buffer };
-          err.stderr = Buffer.from(
+      mockSpawnSync.mockImplementation((args: string[], _opts?: any) => {
+        if (argsContain(args, "rev-parse")) return okResult(".git\n");
+        if (argsContain(args, "worktree") && argsContain(args, "remove")) {
+          return failResult(
             "fatal: '/repo/.magents/sess-dirty' contains modified or untracked files, use --force to delete",
           );
-          throw err;
         }
-        return Buffer.from("");
+        return okResult();
       });
 
       await expect(
@@ -233,10 +218,12 @@ describe("GitWorktreeManager", () => {
         "",
       ].join("\n");
 
-      mockExecSync.mockImplementation((cmd: string) => {
-        if (cmd.includes("rev-parse")) return Buffer.from(".git\n");
-        if (cmd.includes("worktree list")) return porcelain;
-        return Buffer.from("");
+      mockSpawnSync.mockImplementation((args: string[], _opts?: any) => {
+        if (argsContain(args, "rev-parse")) return okResult(".git\n");
+        if (argsContain(args, "worktree") && argsContain(args, "list")) {
+          return okResult(porcelain);
+        }
+        return okResult();
       });
 
       const result = await manager.list("/repo");
@@ -270,10 +257,12 @@ describe("GitWorktreeManager", () => {
         "",
       ].join("\n");
 
-      mockExecSync.mockImplementation((cmd: string) => {
-        if (cmd.includes("rev-parse")) return Buffer.from(".git\n");
-        if (cmd.includes("worktree list")) return porcelain;
-        return Buffer.from("");
+      mockSpawnSync.mockImplementation((args: string[], _opts?: any) => {
+        if (argsContain(args, "rev-parse")) return okResult(".git\n");
+        if (argsContain(args, "worktree") && argsContain(args, "list")) {
+          return okResult(porcelain);
+        }
+        return okResult();
       });
 
       const result = await manager.list("/bare-repo");
@@ -289,7 +278,7 @@ describe("GitWorktreeManager", () => {
     let tmpDir: string;
 
     beforeEach(async () => {
-      tmpDir = await mkdtemp(path.join(tmpdir(), "worktree-test-"));
+      tmpDir = await mkdtemp(path.join(Bun.env.TMPDIR ?? "/tmp", "worktree-test-"));
     });
 
     it("returns true for a valid worktree (has .git file with gitdir:)", async () => {

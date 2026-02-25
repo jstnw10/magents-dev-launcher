@@ -1,71 +1,84 @@
 import { describe, expect, it, mock, beforeEach, afterEach } from "bun:test";
-import { EventEmitter } from "node:events";
-import type { ChildProcess } from "node:child_process";
+import type { Subprocess } from "bun";
 
-// We need to mock child_process before importing the module under test.
-// Bun's module mocking works by replacing the module in the registry.
-
-let mockSpawn: ReturnType<typeof mock>;
-let mockExecSync: ReturnType<typeof mock>;
-
-// Fake ChildProcess that emits events and has a controllable stderr stream
-function createFakeProcess(): ChildProcess & {
-  _stderr: EventEmitter;
-  _emit: (event: string, ...args: unknown[]) => void;
-  _writeStderr: (data: string) => void;
+// Helper: create a fake Bun.Subprocess with controllable stderr stream and exited promise
+function createFakeProcess(): {
+  proc: Subprocess;
+  writeStderr: (data: string) => void;
+  resolveExited: (code: number) => void;
 } {
-  const proc = new EventEmitter() as ChildProcess & {
-    _stderr: EventEmitter;
-    _emit: (event: string, ...args: unknown[]) => void;
-    _writeStderr: (data: string) => void;
-  };
+  let stderrController!: ReadableStreamDefaultController<Uint8Array>;
+  const stderrStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      stderrController = controller;
+    },
+  });
 
-  proc._stderr = new EventEmitter();
-  (proc as any).stderr = proc._stderr;
-  (proc as any).stdout = null;
-  (proc as any).stdin = null;
-  (proc as any).pid = 12345;
-  (proc as any).exitCode = null;
-  (proc as any).killed = false;
-  (proc as any).kill = mock((signal?: string) => {
-    if (signal === "SIGKILL" || signal === "SIGTERM" || !signal) {
+  let resolveExited!: (code: number) => void;
+  const exitedPromise = new Promise<number>((resolve) => {
+    resolveExited = (code: number) => {
+      resolve(code);
+      (proc as any).exitCode = code;
+      try { stderrController.close(); } catch { /* already closed */ }
+    };
+  });
+
+  const proc = {
+    pid: 12345,
+    exitCode: null,
+    killed: false,
+    stdin: null,
+    stdout: null,
+    stderr: stderrStream,
+    exited: exitedPromise,
+    kill: mock((signal?: string) => {
       (proc as any).killed = true;
       // Simulate async exit after kill
       queueMicrotask(() => {
-        (proc as any).exitCode = signal === "SIGKILL" ? 137 : 0;
-        proc.emit("exit", (proc as any).exitCode, signal ?? "SIGTERM");
+        resolveExited(signal === "SIGKILL" ? 137 : 0);
       });
-    }
-    return true;
-  });
+    }),
+    ref: () => {},
+    unref: () => {},
+    [Symbol.asyncDispose]: async () => {},
+  } as unknown as Subprocess;
 
-  proc._emit = (event: string, ...args: unknown[]) => proc.emit(event, ...args);
-  proc._writeStderr = (data: string) => proc._stderr.emit("data", Buffer.from(data));
-
-  return proc;
+  return {
+    proc,
+    writeStderr: (data: string) => {
+      stderrController.enqueue(new TextEncoder().encode(data));
+    },
+    resolveExited,
+  };
 }
 
-// Since Bun doesn't support module mocking easily, we'll test by importing
-// the module and using a different approach: we'll test the class behavior
-// by creating a wrapper that allows injecting dependencies.
-
-// Alternative approach: re-export the module pieces and test the logic directly.
-// For testability, we'll create a version of CloudflareTunnelManager that accepts
-// a spawn function and an install-check function.
-
-// Let's create a test-friendly version by importing and monkey-patching.
-
-// Actually, the cleanest approach for Bun is to use mock.module:
-mock.module("node:child_process", () => {
-  mockSpawn = mock();
-  mockExecSync = mock();
+// Helper to create a successful spawnSync result
+function okSpawnSyncResult(): any {
   return {
-    spawn: mockSpawn,
-    execSync: mockExecSync,
+    success: true,
+    exitCode: 0,
+    stdout: Buffer.from(""),
+    stderr: Buffer.from(""),
   };
-});
+}
 
-// Import AFTER mocking
+function failSpawnSyncResult(): any {
+  return {
+    success: false,
+    exitCode: 1,
+    stdout: Buffer.from(""),
+    stderr: Buffer.from(""),
+  };
+}
+
+// We need to mock both Bun.spawn and Bun.spawnSync
+const originalSpawn = Bun.spawn;
+const originalSpawnSync = Bun.spawnSync;
+
+let mockSpawn: ReturnType<typeof mock>;
+let mockSpawnSync: ReturnType<typeof mock>;
+
+// Import after setting up — tunnel.ts uses Bun globals directly
 const { CloudflareTunnelManager } = await import("./tunnel");
 
 describe("CloudflareTunnelManager", () => {
@@ -73,14 +86,21 @@ describe("CloudflareTunnelManager", () => {
 
   beforeEach(() => {
     manager = new CloudflareTunnelManager();
-    mockExecSync.mockImplementation(() => Buffer.from("cloudflared version 2024.1.0"));
-    mockSpawn.mockReset();
+    mockSpawnSync = mock(() => okSpawnSyncResult());
+    mockSpawn = mock();
+    Bun.spawnSync = mockSpawnSync as any;
+    Bun.spawn = mockSpawn as any;
+  });
+
+  afterEach(() => {
+    Bun.spawn = originalSpawn;
+    Bun.spawnSync = originalSpawnSync;
   });
 
   describe("attach — quick tunnel mode", () => {
     it("spawns cloudflared with correct args and parses URL from stderr", async () => {
-      const fakeProc = createFakeProcess();
-      mockSpawn.mockReturnValue(fakeProc);
+      const { proc, writeStderr } = createFakeProcess();
+      mockSpawn.mockReturnValue(proc);
 
       const attachPromise = manager.attach({
         sessionId: "sess-1",
@@ -89,7 +109,7 @@ describe("CloudflareTunnelManager", () => {
 
       // Simulate cloudflared printing the URL to stderr
       queueMicrotask(() => {
-        fakeProc._writeStderr(
+        writeStderr(
           "2024-01-01T00:00:00Z INF |  https://random-words.trycloudflare.com\n",
         );
       });
@@ -103,15 +123,14 @@ describe("CloudflareTunnelManager", () => {
       });
 
       expect(mockSpawn).toHaveBeenCalledWith(
-        "cloudflared",
-        ["tunnel", "--url", "http://localhost:8081"],
-        { stdio: ["ignore", "ignore", "pipe"] },
+        ["cloudflared", "tunnel", "--url", "http://localhost:8081"],
+        expect.objectContaining({ stdout: "ignore", stderr: "pipe" }),
       );
     });
 
     it("returns existing tunnel if already attached", async () => {
-      const fakeProc = createFakeProcess();
-      mockSpawn.mockReturnValue(fakeProc);
+      const { proc, writeStderr } = createFakeProcess();
+      mockSpawn.mockReturnValue(proc);
 
       const attachPromise = manager.attach({
         sessionId: "sess-reuse",
@@ -119,9 +138,7 @@ describe("CloudflareTunnelManager", () => {
       });
 
       queueMicrotask(() => {
-        fakeProc._writeStderr(
-          "INF |  https://my-tunnel.trycloudflare.com\n",
-        );
+        writeStderr("INF |  https://my-tunnel.trycloudflare.com\n");
       });
 
       await attachPromise;
@@ -154,8 +171,8 @@ describe("CloudflareTunnelManager", () => {
     });
 
     it("rejects if cloudflared exits before printing URL", async () => {
-      const fakeProc = createFakeProcess();
-      mockSpawn.mockReturnValue(fakeProc);
+      const { proc, resolveExited } = createFakeProcess();
+      mockSpawn.mockReturnValue(proc);
 
       const attachPromise = manager.attach({
         sessionId: "sess-crash",
@@ -163,34 +180,17 @@ describe("CloudflareTunnelManager", () => {
       });
 
       queueMicrotask(() => {
-        (fakeProc as any).exitCode = 1;
-        fakeProc.emit("exit", 1, null);
+        resolveExited(1);
       });
 
-      await expect(attachPromise).rejects.toThrow("cloudflared exited unexpectedly");
-    });
-
-    it("rejects if cloudflared emits an error", async () => {
-      const fakeProc = createFakeProcess();
-      mockSpawn.mockReturnValue(fakeProc);
-
-      const attachPromise = manager.attach({
-        sessionId: "sess-err",
-        metroPort: 8081,
-      });
-
-      queueMicrotask(() => {
-        fakeProc.emit("error", new Error("ENOENT"));
-      });
-
-      await expect(attachPromise).rejects.toThrow("cloudflared process error: ENOENT");
+      await expect(attachPromise).rejects.toThrow("exited unexpectedly");
     });
   });
 
   describe("attach — named tunnel mode", () => {
     it("spawns cloudflared with tunnel run and uses configured domain", async () => {
-      const fakeProc = createFakeProcess();
-      mockSpawn.mockReturnValue(fakeProc);
+      const { proc } = createFakeProcess();
+      mockSpawn.mockReturnValue(proc);
 
       const result = await manager.attach({
         sessionId: "sess-named",
@@ -209,17 +209,16 @@ describe("CloudflareTunnelManager", () => {
       });
 
       expect(mockSpawn).toHaveBeenCalledWith(
-        "cloudflared",
-        ["tunnel", "--url", "http://localhost:8083", "run", "my-tunnel"],
-        { stdio: ["ignore", "ignore", "pipe"] },
+        ["cloudflared", "tunnel", "--url", "http://localhost:8083", "run", "my-tunnel"],
+        expect.objectContaining({ stdout: "ignore", stderr: "pipe" }),
       );
     });
   });
 
   describe("detach", () => {
     it("kills the process and removes from map", async () => {
-      const fakeProc = createFakeProcess();
-      mockSpawn.mockReturnValue(fakeProc);
+      const { proc, writeStderr } = createFakeProcess();
+      mockSpawn.mockReturnValue(proc);
 
       const attachPromise = manager.attach({
         sessionId: "sess-detach",
@@ -227,7 +226,7 @@ describe("CloudflareTunnelManager", () => {
       });
 
       queueMicrotask(() => {
-        fakeProc._writeStderr("INF |  https://detach-test.trycloudflare.com\n");
+        writeStderr("INF |  https://detach-test.trycloudflare.com\n");
       });
 
       await attachPromise;
@@ -235,7 +234,7 @@ describe("CloudflareTunnelManager", () => {
       const result = await manager.detach({ sessionId: "sess-detach" });
 
       expect(result).toEqual({ connected: false, provider: "none" });
-      expect((fakeProc as any).kill).toHaveBeenCalledWith("SIGTERM");
+      expect((proc as any).kill).toHaveBeenCalledWith("SIGTERM");
     });
 
     it("returns disconnected state when session not found", async () => {
@@ -246,19 +245,19 @@ describe("CloudflareTunnelManager", () => {
 
   describe("multiple simultaneous tunnels", () => {
     it("manages two tunnels independently", async () => {
-      const proc1 = createFakeProcess();
-      const proc2 = createFakeProcess();
-      mockSpawn.mockReturnValueOnce(proc1).mockReturnValueOnce(proc2);
+      const fake1 = createFakeProcess();
+      const fake2 = createFakeProcess();
+      mockSpawn.mockReturnValueOnce(fake1.proc).mockReturnValueOnce(fake2.proc);
 
       const p1 = manager.attach({ sessionId: "sess-a", metroPort: 8081 });
       queueMicrotask(() => {
-        proc1._writeStderr("INF |  https://tunnel-a.trycloudflare.com\n");
+        fake1.writeStderr("INF |  https://tunnel-a.trycloudflare.com\n");
       });
       const r1 = await p1;
 
       const p2 = manager.attach({ sessionId: "sess-b", metroPort: 8082 });
       queueMicrotask(() => {
-        proc2._writeStderr("INF |  https://tunnel-b.trycloudflare.com\n");
+        fake2.writeStderr("INF |  https://tunnel-b.trycloudflare.com\n");
       });
       const r2 = await p2;
 
@@ -276,8 +275,8 @@ describe("CloudflareTunnelManager", () => {
 
   describe("crash detection", () => {
     it("removes tunnel from map when process crashes", async () => {
-      const fakeProc = createFakeProcess();
-      mockSpawn.mockReturnValue(fakeProc);
+      const { proc, writeStderr, resolveExited } = createFakeProcess();
+      mockSpawn.mockReturnValue(proc);
 
       const attachPromise = manager.attach({
         sessionId: "sess-crash-detect",
@@ -285,25 +284,24 @@ describe("CloudflareTunnelManager", () => {
       });
 
       queueMicrotask(() => {
-        fakeProc._writeStderr("INF |  https://crash-detect.trycloudflare.com\n");
+        writeStderr("INF |  https://crash-detect.trycloudflare.com\n");
       });
 
       await attachPromise;
 
       // Simulate crash after URL was parsed
-      (fakeProc as any).exitCode = 1;
-      fakeProc.emit("exit", 1, null);
+      resolveExited(1);
 
-      // Give the event handler a tick to run
+      // Give the exited handler a tick to run
       await new Promise((r) => setTimeout(r, 10));
 
       // Now attach again should spawn a new process
-      const proc2 = createFakeProcess();
-      mockSpawn.mockReturnValue(proc2);
+      const fake2 = createFakeProcess();
+      mockSpawn.mockReturnValue(fake2.proc);
 
       const reattach = manager.attach({ sessionId: "sess-crash-detect", metroPort: 8085 });
       queueMicrotask(() => {
-        proc2._writeStderr("INF |  https://new-tunnel.trycloudflare.com\n");
+        fake2.writeStderr("INF |  https://new-tunnel.trycloudflare.com\n");
       });
 
       const result = await reattach;
@@ -313,9 +311,7 @@ describe("CloudflareTunnelManager", () => {
 
   describe("cloudflared not installed", () => {
     it("throws a clear error when cloudflared is not found", async () => {
-      mockExecSync.mockImplementation(() => {
-        throw new Error("command not found");
-      });
+      mockSpawnSync.mockReturnValue(failSpawnSyncResult());
 
       await expect(
         manager.attach({ sessionId: "sess-nobin", metroPort: 8081 }),

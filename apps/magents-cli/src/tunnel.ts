@@ -1,4 +1,4 @@
-import { spawn, execSync, type ChildProcess } from "node:child_process";
+import type { Subprocess } from "bun";
 import type { TunnelState } from "@magents/protocol";
 import type { TunnelConfig, TunnelInfo, TunnelManager } from "./types";
 
@@ -7,7 +7,7 @@ const GRACEFUL_SHUTDOWN_MS = 5_000;
 const CLOUDFLARED_URL_REGEX = /https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/;
 
 interface TunnelEntry {
-  process: ChildProcess;
+  process: Subprocess;
   publicUrl: string;
   metroPort: number;
   config: TunnelConfig;
@@ -67,14 +67,15 @@ export class CloudflareTunnelManager implements TunnelManager {
     metroPort: number,
     config: TunnelConfig,
   ): Promise<TunnelState> {
-    const child = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${metroPort}`], {
-      stdio: ["ignore", "ignore", "pipe"],
-    });
+    const proc = Bun.spawn(
+      ["cloudflared", "tunnel", "--url", `http://localhost:${metroPort}`],
+      { stdout: "ignore", stderr: "pipe" },
+    );
 
-    const publicUrl = await parseUrlFromStderr(child, URL_TIMEOUT_MS);
+    const publicUrl = await parseUrlFromStderr(proc, URL_TIMEOUT_MS);
 
-    this.tunnels.set(sessionId, { process: child, publicUrl, metroPort, config });
-    this.watchForCrash(sessionId, child);
+    this.tunnels.set(sessionId, { process: proc, publicUrl, metroPort, config });
+    this.watchForCrash(sessionId, proc);
 
     return {
       connected: true,
@@ -88,15 +89,14 @@ export class CloudflareTunnelManager implements TunnelManager {
     metroPort: number,
     config: Extract<TunnelConfig, { mode: "named" }>,
   ): Promise<TunnelState> {
-    const child = spawn(
-      "cloudflared",
-      ["tunnel", "--url", `http://localhost:${metroPort}`, "run", config.tunnelName],
-      { stdio: ["ignore", "ignore", "pipe"] },
+    const proc = Bun.spawn(
+      ["cloudflared", "tunnel", "--url", `http://localhost:${metroPort}`, "run", config.tunnelName],
+      { stdout: "ignore", stderr: "pipe" },
     );
 
     const publicUrl = `https://${config.domain}`;
-    this.tunnels.set(sessionId, { process: child, publicUrl, metroPort, config });
-    this.watchForCrash(sessionId, child);
+    this.tunnels.set(sessionId, { process: proc, publicUrl, metroPort, config });
+    this.watchForCrash(sessionId, proc);
 
     return {
       connected: true,
@@ -125,10 +125,10 @@ export class CloudflareTunnelManager implements TunnelManager {
     };
   }
 
-  private watchForCrash(sessionId: string, child: ChildProcess): void {
-    child.on("exit", (code, signal) => {
+  private watchForCrash(sessionId: string, proc: Subprocess): void {
+    proc.exited.then(() => {
       const entry = this.tunnels.get(sessionId);
-      if (entry?.process === child) {
+      if (entry?.process === proc) {
         this.tunnels.delete(sessionId);
       }
     });
@@ -136,9 +136,12 @@ export class CloudflareTunnelManager implements TunnelManager {
 }
 
 function assertCloudflaredInstalled(): void {
-  try {
-    execSync("cloudflared --version", { stdio: "ignore" });
-  } catch {
+  const result = Bun.spawnSync(["cloudflared", "--version"], {
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+
+  if (!result.success) {
     throw new Error(
       "cloudflared is not installed or not found in PATH. " +
         "Install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/",
@@ -146,73 +149,55 @@ function assertCloudflaredInstalled(): void {
   }
 }
 
-function parseUrlFromStderr(child: ChildProcess, timeoutMs: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let buffer = "";
+async function parseUrlFromStderr(proc: Subprocess, timeoutMs: number): Promise<string> {
+  const reader = (proc.stderr as ReadableStream<Uint8Array>).getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
 
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        reject(
-          new Error(
-            `Timed out after ${timeoutMs}ms waiting for cloudflared to provide a public URL.`,
-          ),
-        );
-      }
-    }, timeoutMs);
+  const timeout = setTimeout(() => {
+    reader.cancel();
+  }, timeoutMs);
 
-    const onData = (chunk: Buffer) => {
-      buffer += chunk.toString();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
       const match = buffer.match(CLOUDFLARED_URL_REGEX);
-      if (match && !settled) {
-        settled = true;
-        clearTimeout(timer);
-        child.stderr?.removeListener("data", onData);
-        resolve(match[0]);
+      if (match) {
+        clearTimeout(timeout);
+        reader.cancel();
+        return match[0];
       }
-    };
-
-    child.stderr?.on("data", onData);
-
-    child.on("error", (err) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        reject(new Error(`cloudflared process error: ${err.message}`));
-      }
-    });
-
-    child.on("exit", (code, signal) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        reject(
-          new Error(
-            `cloudflared exited unexpectedly (code=${code}, signal=${signal}) before providing a URL.`,
-          ),
-        );
-      }
-    });
-  });
+    }
+    throw new Error(
+      "cloudflared exited unexpectedly before providing a URL.",
+    );
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err instanceof Error && err.message.includes("before providing a URL")) {
+      throw err;
+    }
+    if (buffer.match(CLOUDFLARED_URL_REGEX)) {
+      return buffer.match(CLOUDFLARED_URL_REGEX)![0];
+    }
+    throw new Error(
+      `Timed out after ${timeoutMs}ms waiting for cloudflared to provide a public URL.`,
+    );
+  }
 }
 
-function killProcess(child: ChildProcess): Promise<void> {
-  return new Promise((resolve) => {
-    if (child.exitCode !== null || child.killed) {
-      resolve();
-      return;
-    }
+async function killProcess(proc: Subprocess): Promise<void> {
+  if (proc.exitCode !== null) {
+    return;
+  }
 
-    const forceTimer = setTimeout(() => {
-      child.kill("SIGKILL");
-    }, GRACEFUL_SHUTDOWN_MS);
+  proc.kill("SIGTERM");
 
-    child.on("exit", () => {
-      clearTimeout(forceTimer);
-      resolve();
-    });
+  const forceTimer = setTimeout(() => {
+    proc.kill("SIGKILL");
+  }, GRACEFUL_SHUTDOWN_MS);
 
-    child.kill("SIGTERM");
-  });
+  await proc.exited;
+  clearTimeout(forceTimer);
 }

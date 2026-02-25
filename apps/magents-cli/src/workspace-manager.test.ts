@@ -1,7 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
 
 import { WorkspaceManager } from "./workspace-manager";
 import type { WorktreeInfo, WorktreeManager, WorkspaceConfig } from "./types";
@@ -63,7 +62,7 @@ describe("WorkspaceManager", () => {
   const originalEnv = process.env.MAGENTS_WORKSPACES_ROOT;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "ws-manager-test-"));
+    tmpDir = await mkdtemp(path.join(Bun.env.TMPDIR ?? "/tmp", "ws-manager-test-"));
     workspacesRoot = path.join(tmpDir, "workspaces");
     repoDir = path.join(tmpDir, "repo");
     await mkdir(workspacesRoot, { recursive: true });

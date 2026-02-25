@@ -1,19 +1,21 @@
-import { createServer } from "node:net";
-
 import { DEFAULT_METRO_PORT, OrchestrationError, type PortAllocator, type SessionRegistry } from "./types";
 
 const PORT_RANGE_MIN = 8082;
 const PORT_RANGE_MAX = 9999;
 const MAX_RETRIES = 10;
 
-function isPortFree(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const server = createServer();
-    server.once("error", () => resolve(false));
-    server.listen(port, "127.0.0.1", () => {
-      server.close(() => resolve(true));
+async function isPortFree(port: number): Promise<boolean> {
+  try {
+    const server = Bun.serve({
+      port,
+      hostname: "127.0.0.1",
+      fetch() { return new Response(); },
     });
-  });
+    server.stop(true);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function randomPortInRange(): number {

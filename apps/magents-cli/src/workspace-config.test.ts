@@ -1,7 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, mkdir, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
 
 import {
   generateWorkspaceId,
@@ -107,7 +106,7 @@ describe("getWorkspacesRoot", () => {
   it("returns default path when env var is not set", () => {
     delete process.env.MAGENTS_WORKSPACES_ROOT;
     const root = getWorkspacesRoot();
-    expect(root).toBe(path.join(os.homedir(), ".magents", "workspaces"));
+    expect(root).toBe(path.join(Bun.env.HOME ?? "/tmp", ".magents", "workspaces"));
   });
 
   it("respects MAGENTS_WORKSPACES_ROOT env var", () => {
@@ -120,7 +119,7 @@ describe("readWorkspaceConfig / writeWorkspaceConfig", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "ws-config-test-"));
+    tmpDir = await mkdtemp(path.join(Bun.env.TMPDIR ?? "/tmp", "ws-config-test-"));
   });
 
   afterEach(async () => {
@@ -150,7 +149,7 @@ describe("initWorkspaceDir", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "ws-init-test-"));
+    tmpDir = await mkdtemp(path.join(Bun.env.TMPDIR ?? "/tmp", "ws-init-test-"));
   });
 
   afterEach(async () => {
@@ -170,7 +169,7 @@ describe("listWorkspaces", () => {
   const originalEnv = process.env.MAGENTS_WORKSPACES_ROOT;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "ws-list-test-"));
+    tmpDir = await mkdtemp(path.join(Bun.env.TMPDIR ?? "/tmp", "ws-list-test-"));
     process.env.MAGENTS_WORKSPACES_ROOT = tmpDir;
   });
 
@@ -225,7 +224,7 @@ describe("detectPackageManager", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "ws-pm-test-"));
+    tmpDir = await mkdtemp(path.join(Bun.env.TMPDIR ?? "/tmp", "ws-pm-test-"));
   });
 
   afterEach(async () => {

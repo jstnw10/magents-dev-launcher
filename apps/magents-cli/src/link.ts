@@ -1,5 +1,6 @@
-import * as path from "node:path";
+import path from "node:path";
 import * as readline from "node:readline";
+import { readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 
 export interface LinkDeps {
   exec: (cmd: string) => Promise<{ stdout: string; stderr: string }>;
@@ -201,26 +202,18 @@ export async function handleLink(args: string[], deps: LinkDeps): Promise<number
 }
 
 export function createDefaultLinkDeps(): LinkDeps {
-  const { execSync } = require("node:child_process");
-  const fs = require("node:fs/promises");
-
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   return {
-    exec: (cmd: string) => {
-      return new Promise((resolve, reject) => {
-        try {
-          const stdout = execSync(cmd, { encoding: "utf-8" });
-          resolve({ stdout, stderr: "" });
-        } catch (error: any) {
-          reject(error);
-        }
-      });
+    exec: async (cmd: string) => {
+      const result = Bun.spawnSync(["sh", "-c", cmd], { stdout: "pipe", stderr: "pipe" });
+      if (!result.success) throw new Error(result.stderr.toString());
+      return { stdout: result.stdout.toString(), stderr: result.stderr.toString() };
     },
-    readFile: (filePath: string) => fs.readFile(filePath, "utf-8"),
-    writeFile: (filePath: string, content: string) => fs.writeFile(filePath, content, "utf-8"),
-    readdir: (dirPath: string, opts?: any) => fs.readdir(dirPath, opts),
-    stat: (filePath: string) => fs.stat(filePath),
+    readFile: (filePath: string) => Bun.file(filePath).text(),
+    writeFile: (filePath: string, content: string) => Bun.write(filePath, content).then(() => {}),
+    readdir: (dirPath: string, opts?: any) => fsReaddir(dirPath, opts),
+    stat: (filePath: string) => fsStat(filePath),
     prompt: (question: string) =>
       new Promise((resolve) => {
         rl.question(question, (answer: string) => {

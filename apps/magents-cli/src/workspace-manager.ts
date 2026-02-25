@@ -1,4 +1,4 @@
-import { rm } from "node:fs/promises";
+import { $ } from "bun";
 import path from "node:path";
 
 import {
@@ -194,7 +194,7 @@ export class WorkspaceManager {
 
     // Remove the workspace directory (parent of repo-name dir)
     const workspaceDir = path.dirname(workspace.path);
-    await rm(workspaceDir, { recursive: true, force: true });
+    await $`rm -rf ${workspaceDir}`.quiet();
 
     try {
       await this.sync?.removeWorkspace(workspaceId);
