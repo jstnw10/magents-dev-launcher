@@ -1,7 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach, mock, spyOn } from "bun:test";
 import { mkdtemp, rm, mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
 
 import { WorkspaceManager } from "./workspace-manager";
 import { OrchestrationError } from "./types";
@@ -46,7 +45,7 @@ describe("Workspace Integration — full lifecycle", () => {
   const originalEnv = process.env.MAGENTS_WORKSPACES_ROOT;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "ws-integration-"));
+    tmpDir = await mkdtemp(path.join(Bun.env.TMPDIR ?? "/tmp", "ws-integration-"));
     workspacesRoot = path.join(tmpDir, "workspaces");
     repoDir = path.join(tmpDir, "repo");
     await mkdir(workspacesRoot, { recursive: true });
@@ -334,7 +333,7 @@ describe("Workspace Integration — Convex sync", () => {
   const originalEnv = process.env.MAGENTS_WORKSPACES_ROOT;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "ws-sync-integration-"));
+    tmpDir = await mkdtemp(path.join(Bun.env.TMPDIR ?? "/tmp", "ws-sync-integration-"));
     workspacesRoot = path.join(tmpDir, "workspaces");
     repoDir = path.join(tmpDir, "repo");
     await mkdir(workspacesRoot, { recursive: true });

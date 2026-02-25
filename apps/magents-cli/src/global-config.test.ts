@@ -1,7 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
 
 import { getMagentsRoot, readGlobalConfig, writeGlobalConfig } from "./global-config";
 import type { MagentsGlobalConfig } from "./global-config";
@@ -19,7 +18,7 @@ describe("getMagentsRoot", () => {
 
   it("returns default ~/.magents when env var is not set", () => {
     delete process.env.MAGENTS_HOME;
-    expect(getMagentsRoot()).toBe(path.join(os.homedir(), ".magents"));
+    expect(getMagentsRoot()).toBe(path.join(Bun.env.HOME ?? "/tmp", ".magents"));
   });
 
   it("respects MAGENTS_HOME env var override", () => {
@@ -33,7 +32,7 @@ describe("readGlobalConfig", () => {
   const originalEnv = process.env.MAGENTS_HOME;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "global-config-read-"));
+    tmpDir = await mkdtemp(path.join(Bun.env.TMPDIR ?? "/tmp", "global-config-read-"));
     process.env.MAGENTS_HOME = tmpDir;
   });
 
@@ -75,7 +74,7 @@ describe("writeGlobalConfig", () => {
   const originalEnv = process.env.MAGENTS_HOME;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "global-config-write-"));
+    tmpDir = await mkdtemp(path.join(Bun.env.TMPDIR ?? "/tmp", "global-config-write-"));
     process.env.MAGENTS_HOME = tmpDir;
   });
 

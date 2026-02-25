@@ -1,5 +1,3 @@
-import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
 import * as readline from "node:readline";
 
 import { readGlobalConfig, writeGlobalConfig } from "./global-config";
@@ -40,31 +38,24 @@ export async function validateConvexUrl(url: string): Promise<void> {
   }
 }
 
-function runConvexPush(deployKey: string): Promise<{ ok: boolean; error?: string }> {
-  return new Promise((resolve) => {
-    const child = spawn("npx", ["convex", "dev", "--once"], {
+async function runConvexPush(deployKey: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const proc = Bun.spawn(["npx", "convex", "dev", "--once"], {
       env: { ...process.env, CONVEX_DEPLOY_KEY: deployKey },
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: true,
+      stdout: "pipe",
+      stderr: "pipe",
     });
 
-    let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
+    const exitCode = await proc.exited;
+    if (exitCode === 0) {
+      return { ok: true };
+    }
 
-    child.on("error", (err) => {
-      resolve({ ok: false, error: err.message });
-    });
-
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve({ ok: true });
-      } else {
-        resolve({ ok: false, error: stderr.trim() || `Process exited with code ${code}` });
-      }
-    });
-  });
+    const stderr = await new Response(proc.stderr).text();
+    return { ok: false, error: stderr.trim() || `Process exited with code ${exitCode}` };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /**
@@ -82,7 +73,8 @@ export function deriveUrlFromDeployment(deployment: string): string | null {
  */
 async function defaultReadEnvLocal(): Promise<string | null> {
   try {
-    const content = await readFile(".env.local", "utf-8");
+    const file = Bun.file(".env.local");
+    const content = await file.text();
     const match = content.match(/^CONVEX_DEPLOYMENT=(.+)$/m);
     return match ? match[1].trim() : null;
   } catch {
@@ -90,21 +82,19 @@ async function defaultReadEnvLocal(): Promise<string | null> {
   }
 }
 
-function defaultRunConvexSetup(): Promise<{ exitCode: number }> {
-  return new Promise((resolve) => {
-    const child = spawn("npx", ["convex", "dev", "--configure", "new", "--once"], {
-      stdio: "inherit",
-      shell: true,
+async function defaultRunConvexSetup(): Promise<{ exitCode: number }> {
+  try {
+    const proc = Bun.spawn(["npx", "convex", "dev", "--configure", "new", "--once"], {
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
     });
 
-    child.on("error", () => {
-      resolve({ exitCode: 1 });
-    });
-
-    child.on("close", (code) => {
-      resolve({ exitCode: code ?? 1 });
-    });
-  });
+    const exitCode = await proc.exited;
+    return { exitCode };
+  } catch {
+    return { exitCode: 1 };
+  }
 }
 
 export interface InitDeps {

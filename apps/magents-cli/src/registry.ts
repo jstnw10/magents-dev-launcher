@@ -1,5 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import type { SessionRecord, SessionRegistry } from "./types";
@@ -14,28 +13,23 @@ function defaultRegistryPath() {
     return process.env.MAGENTS_CLI_REGISTRY_PATH;
   }
 
-  return path.join(os.homedir(), ".magents", "sessions.json");
+  return path.join(Bun.env.HOME ?? "/tmp", ".magents", "sessions.json");
 }
 
 export class FileSessionRegistry implements SessionRegistry {
   constructor(readonly filePath = defaultRegistryPath()) {}
 
   async load() {
-    try {
-      const raw = await readFile(this.filePath, "utf8");
-      if (raw.trim().length === 0) {
-        return [];
-      }
-      const parsed = JSON.parse(raw) as RegistryDocument;
-      return parsed.sessions ?? [];
-    } catch (error) {
-      const maybeCode = (error as { code?: string }).code;
-      if (maybeCode === "ENOENT") {
-        return [];
-      }
-
-      throw error;
+    const file = Bun.file(this.filePath);
+    if (!(await file.exists())) {
+      return [];
     }
+    const raw = await file.text();
+    if (raw.trim().length === 0) {
+      return [];
+    }
+    const parsed = JSON.parse(raw) as RegistryDocument;
+    return parsed.sessions ?? [];
   }
 
   async save(sessions: SessionRecord[]) {
@@ -44,6 +38,6 @@ export class FileSessionRegistry implements SessionRegistry {
       version: 1,
       sessions,
     };
-    await writeFile(this.filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    await Bun.write(this.filePath, `${JSON.stringify(payload, null, 2)}\n`);
   }
 }

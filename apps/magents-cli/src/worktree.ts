@@ -1,5 +1,3 @@
-import { execSync } from "node:child_process";
-import { readFile, access } from "node:fs/promises";
 import path from "node:path";
 
 import { OrchestrationError, type WorktreeInfo, type WorktreeManager } from "./types";
@@ -19,13 +17,13 @@ export class GitWorktreeManager implements WorktreeManager {
 
     assertGitRepo(input.sourceRoot);
 
-    try {
-      execSync(
-        `git worktree add ${quote(targetPath)} -b ${quote(branchName)} ${quote(baseRef)}`,
-        { cwd: input.sourceRoot, stdio: "pipe" },
-      );
-    } catch (err) {
-      const stderr = extractStderr(err);
+    const result = Bun.spawnSync(
+      ["git", "worktree", "add", targetPath, "-b", branchName, baseRef],
+      { cwd: input.sourceRoot, stdout: "pipe", stderr: "pipe" },
+    );
+
+    if (!result.success) {
+      const stderr = result.stderr.toString().trim();
 
       if (stderr.includes("already exists")) {
         throw new OrchestrationError(
@@ -57,30 +55,30 @@ export class GitWorktreeManager implements WorktreeManager {
   }): Promise<void> {
     assertGitRepo(input.sourceRoot);
 
-    const forceFlag = input.force ? " --force" : "";
+    const args = ["git", "worktree", "remove", input.path];
+    if (input.force) args.push("--force");
 
-    try {
-      execSync(`git worktree remove ${quote(input.path)}${forceFlag}`, {
-        cwd: input.sourceRoot,
-        stdio: "pipe",
-      });
-    } catch (err) {
-      const stderr = extractStderr(err);
+    const result = Bun.spawnSync(args, {
+      cwd: input.sourceRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    if (!result.success) {
+      const stderr = result.stderr.toString().trim();
 
       // Worktree directory was already deleted manually — prune instead
       if (
         stderr.includes("No such file or directory") ||
         stderr.includes("is not a working tree")
       ) {
-        try {
-          execSync("git worktree prune", {
-            cwd: input.sourceRoot,
-            stdio: "pipe",
-          });
-          return;
-        } catch {
-          // If prune also fails, fall through to the generic error
-        }
+        const pruneResult = Bun.spawnSync(["git", "worktree", "prune"], {
+          cwd: input.sourceRoot,
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        if (pruneResult.success) return;
+        // If prune also fails, fall through to the generic error
       }
 
       if (stderr.includes("contains modified or untracked files")) {
@@ -100,34 +98,31 @@ export class GitWorktreeManager implements WorktreeManager {
   async list(sourceRoot: string): Promise<WorktreeInfo[]> {
     assertGitRepo(sourceRoot);
 
-    let output: string;
-    try {
-      output = execSync("git worktree list --porcelain", {
-        cwd: sourceRoot,
-        encoding: "utf-8",
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-    } catch (err) {
-      const stderr = extractStderr(err);
+    const result = Bun.spawnSync(["git", "worktree", "list", "--porcelain"], {
+      cwd: sourceRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    if (!result.success) {
+      const stderr = result.stderr.toString().trim();
       throw new OrchestrationError(
         "WORKTREE_LIST_FAILED",
         `Failed to list worktrees: ${stderr}`,
       );
     }
 
-    return parsePorcelainOutput(output);
+    return parsePorcelainOutput(result.stdout.toString());
   }
 
   async exists(worktreePath: string): Promise<boolean> {
-    try {
-      await access(worktreePath);
-    } catch {
+    const gitFile = Bun.file(path.join(worktreePath, ".git"));
+    if (!(await gitFile.exists())) {
       return false;
     }
 
     try {
-      const gitFilePath = path.join(worktreePath, ".git");
-      const content = await readFile(gitFilePath, "utf-8");
+      const content = await gitFile.text();
       return content.trimStart().startsWith("gitdir:");
     } catch {
       return false;
@@ -185,32 +180,16 @@ export function parsePorcelainOutput(output: string): WorktreeInfo[] {
 }
 
 function assertGitRepo(dir: string): void {
-  try {
-    execSync("git rev-parse --git-dir", { cwd: dir, stdio: "pipe" });
-  } catch {
+  const result = Bun.spawnSync(["git", "rev-parse", "--git-dir"], {
+    cwd: dir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  if (!result.success) {
     throw new OrchestrationError(
       "NOT_A_GIT_REPO",
       `'${dir}' is not a git repository.`,
     );
   }
-}
-
-/** Shell-quote a string for use in a command. */
-function quote(s: string): string {
-  // Wrap in single-quotes and escape any embedded single-quotes
-  return `'${s.replace(/'/g, "'\\''")}'`;
-}
-
-function extractStderr(err: unknown): string {
-  if (
-    err &&
-    typeof err === "object" &&
-    "stderr" in err
-  ) {
-    const stderr = (err as { stderr: unknown }).stderr;
-    if (Buffer.isBuffer(stderr)) return stderr.toString("utf-8").trim();
-    if (typeof stderr === "string") return stderr.trim();
-  }
-  if (err instanceof Error) return err.message;
-  return String(err);
 }
