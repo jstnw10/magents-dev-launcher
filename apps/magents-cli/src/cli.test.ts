@@ -11,8 +11,10 @@ import type {
   TunnelConfig,
   TunnelInfo,
   TunnelManager,
+  WorktreeInfo,
   WorktreeManager,
 } from "./types";
+import { WorkspaceManager } from "./workspace-manager";
 
 class InMemoryRegistry implements SessionRegistry {
   constructor(private readonly sessions: SessionRecord[] = []) {}
@@ -46,6 +48,14 @@ class TestWorktreeManager implements WorktreeManager {
 
   async cleanup(input: { sourceRoot: string; path: string }) {
     this.cleanedPaths.push(`${input.sourceRoot}:${input.path}`);
+  }
+
+  async list(_sourceRoot: string): Promise<WorktreeInfo[]> {
+    return [];
+  }
+
+  async exists(_worktreePath: string): Promise<boolean> {
+    return false;
   }
 }
 
@@ -112,10 +122,11 @@ class TestTunnelManager implements TunnelManager {
 
 function setupTestCli() {
   const registry = new InMemoryRegistry();
+  const worktrees = new TestWorktreeManager();
   let sequence = 0;
   const orchestrator = new SessionOrchestrator({
     registry,
-    worktrees: new TestWorktreeManager(),
+    worktrees,
     tunnels: new TestTunnelManager(),
     ports: new MockPortAllocator(),
     idFactory: () => {
@@ -126,12 +137,15 @@ function setupTestCli() {
   const controlClient = new ControlClient(new LocalControlTransport(orchestrator), {
     correlationIdFactory: () => "corr-test",
   });
+  const workspaceManager = new WorkspaceManager({ worktrees });
   const output: string[] = [];
   const errors: string[] = [];
 
   const deps = {
     controlClient,
     orchestrator,
+    workspaceManager,
+    syncEnabled: false,
     cwd: "/repo/project",
     stdout: (line: string) => {
       output.push(line);
@@ -475,10 +489,11 @@ describe("CLI orchestration", () => {
   it("port allocation resilience: custom start port", async () => {
     // Use a MockPortAllocator starting at 9000 to simulate 8081 being unavailable
     const registry = new InMemoryRegistry();
+    const worktrees = new TestWorktreeManager();
     let sequence = 0;
     const orchestrator = new SessionOrchestrator({
       registry,
-      worktrees: new TestWorktreeManager(),
+      worktrees,
       tunnels: new TestTunnelManager(),
       ports: new MockPortAllocator(9000),
       idFactory: () => {
@@ -489,11 +504,14 @@ describe("CLI orchestration", () => {
     const controlClient = new ControlClient(new LocalControlTransport(orchestrator), {
       correlationIdFactory: () => "corr-test",
     });
+    const workspaceManager = new WorkspaceManager({ worktrees });
     const output: string[] = [];
     const errors: string[] = [];
     const deps = {
       controlClient,
       orchestrator,
+      workspaceManager,
+      syncEnabled: false,
       cwd: "/repo/project",
       stdout: (line: string) => output.push(line),
       stderr: (line: string) => errors.push(line),

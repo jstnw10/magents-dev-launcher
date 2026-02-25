@@ -64,6 +64,7 @@
       "dependencies": {
         "@magents/protocol": "workspace:*",
         "@magents/sdk": "workspace:*",
+        "convex": "^1.32.0",
       },
       "devDependencies": {
         "@types/node": "^24.7.2",

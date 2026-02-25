@@ -26,16 +26,28 @@ export interface SessionRegistry {
   save(sessions: SessionRecord[]): Promise<void>;
 }
 
+export interface WorktreeInfo {
+  readonly worktree: string;
+  readonly HEAD: string;
+  readonly branch: string;
+  readonly bare: boolean;
+  readonly detached: boolean;
+}
+
 export interface WorktreeManager {
   provision(input: {
     sessionId: SessionId;
     sourceRoot: string;
     requestedPath?: string;
+    baseRef?: string;
   }): Promise<string>;
   cleanup(input: {
     sourceRoot: string;
     path: string;
+    force?: boolean;
   }): Promise<void>;
+  list(sourceRoot: string): Promise<WorktreeInfo[]>;
+  exists(worktreePath: string): Promise<boolean>;
 }
 
 export type TunnelConfig =
@@ -95,6 +107,37 @@ export function createSessionSummary(record: SessionRecord): SessionSummary {
     tunnelUrl: record.tunnel.publicUrl,
     state: record.state,
   };
+}
+
+export type WorkspaceStatus = "active" | "archived";
+
+export type PackageManager = "bun" | "pnpm" | "yarn" | "npm";
+
+export interface WorkspaceConfig {
+  id: string;
+  title: string;
+  branch: string;
+  baseRef: string;
+  baseCommitSha: string;
+  status: WorkspaceStatus;
+  createdAt: string;
+  updatedAt: string;
+  path: string;
+  repositoryPath: string;
+  repositoryOwner?: string;
+  repositoryName?: string;
+  worktreePath: string;
+  tags: string[];
+  archived?: boolean;
+  archivedAt?: string;
+}
+
+export interface WorkspaceCreateOptions {
+  repositoryPath: string;
+  title?: string;
+  branch?: string;
+  baseRef?: string;
+  setupScript?: string;
 }
 
 export function toCommandFailure(error: unknown): CommandFailure {

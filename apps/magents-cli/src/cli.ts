@@ -7,12 +7,16 @@ import { SessionOrchestrator } from "./orchestrator";
 import { SystemPortAllocator } from "./port-allocator";
 import { FileSessionRegistry } from "./registry";
 import { CloudflareTunnelManager } from "./tunnel";
+import { ConvexWorkspaceSync } from "./convex-sync";
 import { OrchestrationError, type TunnelConfig } from "./types";
 import { GitWorktreeManager } from "./worktree";
+import { WorkspaceManager } from "./workspace-manager";
 
 export interface CliDependencies {
   readonly controlClient: ControlClient;
   readonly orchestrator: SessionOrchestrator;
+  readonly workspaceManager: WorkspaceManager;
+  readonly syncEnabled: boolean;
   readonly cwd: string;
   readonly stdout: (line: string) => void;
   readonly stderr: (line: string) => void;
@@ -82,16 +86,26 @@ function requireValue(args: readonly string[], flag: string) {
 
 function createDefaultDeps(): CliDependencies {
   const registry = new FileSessionRegistry();
+  const worktrees = new GitWorktreeManager();
   const orchestrator = new SessionOrchestrator({
     registry,
-    worktrees: new GitWorktreeManager(),
+    worktrees,
     tunnels: new CloudflareTunnelManager(),
     ports: new SystemPortAllocator(registry),
   });
   const controlClient = new ControlClient(new LocalControlTransport(orchestrator));
+  const convexUrl = process.env.CONVEX_URL ?? "";
+  const syncEnabled = convexUrl !== "";
+  const sync = new ConvexWorkspaceSync({
+    convexUrl,
+    enabled: syncEnabled,
+  });
+  const workspaceManager = new WorkspaceManager({ worktrees, sync });
   return {
     orchestrator,
     controlClient,
+    workspaceManager,
+    syncEnabled,
     cwd: process.cwd(),
     stdout: (line) => {
       console.log(line);
@@ -104,7 +118,7 @@ function createDefaultDeps(): CliDependencies {
 
 export async function runCli(argv: string[], deps: CliDependencies = createDefaultDeps()) {
   if (argv.length === 0) {
-    deps.stderr("Usage: magents <session|worktree|tunnel> <command> [options]");
+    deps.stderr("Usage: magents <session|worktree|tunnel|workspace> <command> [options]");
     return 1;
   }
 
@@ -221,6 +235,55 @@ export async function runCli(argv: string[], deps: CliDependencies = createDefau
             );
           }
           deps.stdout(json({ tunnel }));
+          return 0;
+        }
+
+        break;
+      }
+      case "workspace": {
+        if (command === "create") {
+          const repo = requireValue(args, "--repo");
+          const title = parseValue(args, "--title");
+          const baseRef = parseValue(args, "--base-ref");
+          const setupCommand = parseValue(args, "--setup-command");
+          const result = await deps.workspaceManager.create({
+            repositoryPath: repo,
+            title,
+            baseRef,
+            setupScript: setupCommand,
+          });
+          deps.stdout(json(result));
+          if (deps.syncEnabled) deps.stdout("Synced to cloud.");
+          return 0;
+        }
+
+        if (command === "list") {
+          const workspaces = await deps.workspaceManager.list();
+          deps.stdout(json({ workspaces }));
+          return 0;
+        }
+
+        if (command === "status") {
+          const id = requireValue(args, "--id");
+          const workspace = await deps.workspaceManager.status(id);
+          deps.stdout(json({ workspace }));
+          return 0;
+        }
+
+        if (command === "archive") {
+          const id = requireValue(args, "--id");
+          const workspace = await deps.workspaceManager.archive(id);
+          deps.stdout(json({ workspace }));
+          if (deps.syncEnabled) deps.stdout("Synced to cloud.");
+          return 0;
+        }
+
+        if (command === "destroy") {
+          const id = requireValue(args, "--id");
+          const force = parseBoolean(args, "--force");
+          await deps.workspaceManager.destroy(id, { force });
+          deps.stdout(json({ destroyed: true, workspaceId: id }));
+          if (deps.syncEnabled) deps.stdout("Synced to cloud.");
           return 0;
         }
 
