@@ -1,4 +1,3 @@
-import { execSync } from "node:child_process";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 
@@ -53,11 +52,15 @@ export class WorkspaceManager {
     // Resolve the base commit SHA before creating the worktree
     let baseCommitSha: string;
     try {
-      baseCommitSha = execSync(`git rev-parse ${baseRef}`, {
+      const revParseResult = Bun.spawnSync(["git", "rev-parse", baseRef], {
         cwd: options.repositoryPath,
-        encoding: "utf-8",
-        stdio: ["pipe", "pipe", "pipe"],
-      }).trim();
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (revParseResult.exitCode !== 0) {
+        throw new Error("git rev-parse failed");
+      }
+      baseCommitSha = revParseResult.stdout.toString().trim();
     } catch {
       throw new OrchestrationError(
         "INVALID_BASE_REF",
@@ -103,21 +106,17 @@ export class WorkspaceManager {
     const setupScript = options.setupScript ?? getDefaultSetupScript(packageManager);
 
     try {
-      const output = execSync(setupScript, {
+      const setupResult = Bun.spawnSync(["sh", "-c", setupScript], {
         cwd: workspacePath,
-        encoding: "utf-8",
-        stdio: ["pipe", "pipe", "pipe"],
-        timeout: 120_000,
+        stdout: "pipe",
+        stderr: "pipe",
       });
-      result.setupOutput = output;
+      if (setupResult.exitCode !== 0) {
+        throw new Error(setupResult.stderr.toString());
+      }
+      result.setupOutput = setupResult.stdout.toString();
     } catch (err) {
-      const stderr =
-        err && typeof err === "object" && "stderr" in err
-          ? String((err as { stderr: unknown }).stderr)
-          : err instanceof Error
-            ? err.message
-            : String(err);
-      result.setupError = stderr;
+      result.setupError = err instanceof Error ? err.message : String(err);
     }
 
     try {

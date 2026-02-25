@@ -7,7 +7,7 @@
     "noEmit": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
-    "types": ["node"],
+    "types": ["node", "bun"],
     "baseUrl": ".",
     "paths": {
       "@magents/protocol": ["../../packages/protocol/src/index.ts"],
