@@ -1,31 +1,30 @@
 {
-  "name": "@magents/dev-launcher",
-  "version": "0.1.0",
-  "description": "Reusable launcher integration surface for magents apps.",
-  "type": "module",
-  "exports": {
-    ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
-    },
-    "./app.plugin.js": "./app.plugin.js"
+  "name": "expo-dev-launcher",
+  "title": "Expo Development Launcher",
+  "version": "55.0.8-magents.1",
+  "description": "Pre-release version of the Expo development launcher package for testing.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/expo/expo.git",
+    "directory": "packages/expo-dev-launcher"
   },
-  "files": [
-    "src",
-    "app.plugin.js",
-    "plugin/build"
+  "keywords": [
+    "react-native"
   ],
-  "scripts": {
-    "build": "tsc --noEmit",
-    "test": "bun test",
-    "lint": "tsc --noEmit",
-    "typecheck": "tsc --noEmit"
-  },
+  "author": "650 Industries, Inc.",
+  "license": "MIT",
+  "homepage": "https://docs.expo.dev",
   "dependencies": {
-    "@magents/protocol": "workspace:*",
-    "@magents/sdk": "workspace:*"
+    "@expo/schema-utils": "^55.0.2",
+    "convex": "^1.32.0",
+    "expo-dev-menu": "55.0.7",
+    "expo-manifests": "~55.0.8"
+  },
+  "peerDependencies": {
+    "expo": "*"
   },
   "devDependencies": {
+    "expo-module-scripts": "^5.0.8",
     "typescript": "^5.9.3"
   }
 }
