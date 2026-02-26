@@ -21,6 +21,14 @@ import { ConvexWorkspaceSync } from "./convex-sync";
 import { OrchestrationError, type TunnelConfig } from "./types";
 import { GitWorktreeManager } from "./worktree";
 import { WorkspaceManager } from "./workspace-manager";
+import { AgentManager } from "./agent-manager";
+import { OpenCodeServer } from "./opencode-server";
+import { createOpenCodeClient } from "./opencode-client";
+
+export interface AgentDeps {
+  readonly server: Pick<OpenCodeServer, "start" | "stop" | "status" | "getOrStart">;
+  readonly createManager: (serverUrl: string) => AgentManager;
+}
 
 export interface CliDependencies {
   readonly controlClient: ControlClient;
@@ -31,6 +39,7 @@ export interface CliDependencies {
   readonly stdout: (line: string) => void;
   readonly stderr: (line: string) => void;
   readonly opencodeResolverDeps?: Partial<OpencodeResolverDeps>;
+  readonly agentDeps?: AgentDeps;
 }
 
 function parseValue(args: readonly string[], flag: string) {
@@ -132,7 +141,7 @@ export async function runCli(argv: string[], deps?: CliDependencies) {
   const resolvedDeps = deps ?? (await createDefaultDeps());
 
   if (argv.length === 0) {
-    resolvedDeps.stderr("Usage: magents <session|worktree|tunnel|workspace|opencode|init|link> <command> [options]");
+    resolvedDeps.stderr("Usage: magents <session|worktree|tunnel|workspace|opencode|agent|init|link> <command> [options]");
     return 1;
   }
 
@@ -341,6 +350,81 @@ export async function runCli(argv: string[], deps?: CliDependencies) {
           }
           const version = await getOpencodeVersion(detected, resolverDeps);
           resolvedDeps.stdout(json({ path: detected, version }));
+          return 0;
+        }
+
+        break;
+      }
+      case "agent": {
+        const workspacePath = parseValue(args, "--workspace-path") ?? resolvedDeps.cwd;
+        const agentDeps = resolvedDeps.agentDeps ?? {
+          server: new OpenCodeServer(),
+          createManager: (serverUrl: string) => new AgentManager({ client: createOpenCodeClient(serverUrl) }),
+        };
+        const server = agentDeps.server;
+
+        if (command === "server-start") {
+          const info = await server.start(workspacePath);
+          resolvedDeps.stdout(json(info));
+          return 0;
+        }
+
+        if (command === "server-stop") {
+          await server.stop(workspacePath);
+          resolvedDeps.stdout(json({ stopped: true }));
+          return 0;
+        }
+
+        if (command === "server-status") {
+          const result = await server.status(workspacePath);
+          resolvedDeps.stdout(json(result));
+          return 0;
+        }
+
+        if (command === "create") {
+          const label = requireValue(args, "--label");
+          const model = parseValue(args, "--model");
+          const agent = parseValue(args, "--agent");
+          const serverInfo = await server.getOrStart(workspacePath);
+          const mgr = agentDeps.createManager(serverInfo.url);
+          const metadata = await mgr.createAgent(workspacePath, { label, model, agent });
+          resolvedDeps.stdout(json(metadata));
+          return 0;
+        }
+
+        if (command === "list") {
+          const serverInfo = await server.getOrStart(workspacePath);
+          const mgr = agentDeps.createManager(serverInfo.url);
+          const agents = await mgr.listAgents(workspacePath);
+          resolvedDeps.stdout(json({ agents }));
+          return 0;
+        }
+
+        if (command === "send") {
+          const agentId = requireValue(args, "--agent-id");
+          const message = requireValue(args, "--message");
+          const serverInfo = await server.getOrStart(workspacePath);
+          const mgr = agentDeps.createManager(serverInfo.url);
+          const response = await mgr.sendMessage(workspacePath, agentId, message);
+          resolvedDeps.stdout(json(response));
+          return 0;
+        }
+
+        if (command === "conversation") {
+          const agentId = requireValue(args, "--agent-id");
+          const serverInfo = await server.getOrStart(workspacePath);
+          const mgr = agentDeps.createManager(serverInfo.url);
+          const conversation = await mgr.getConversation(workspacePath, agentId);
+          resolvedDeps.stdout(json(conversation));
+          return 0;
+        }
+
+        if (command === "remove") {
+          const agentId = requireValue(args, "--agent-id");
+          const serverInfo = await server.getOrStart(workspacePath);
+          const mgr = agentDeps.createManager(serverInfo.url);
+          await mgr.removeAgent(workspacePath, agentId);
+          resolvedDeps.stdout(json({ removed: true, agentId }));
           return 0;
         }
 

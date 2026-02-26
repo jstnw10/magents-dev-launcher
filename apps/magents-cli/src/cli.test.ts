@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { ControlClient } from "@magents/sdk";
 
+import type { AgentDeps } from "./cli";
 import { runCli } from "./cli";
+import type { AgentMetadata, Conversation, ConversationMessage, OpenCodeClientInterface } from "./agent-manager";
+import { AgentManager } from "./agent-manager";
+import type { ServerInfo } from "./opencode-server";
 import { LocalControlTransport } from "./control-transport";
 import type { MagentsGlobalConfig } from "./global-config";
 import type { OpencodeResolverDeps } from "./opencode-resolver";
@@ -756,5 +760,316 @@ describe("CLI opencode commands", () => {
 
     expect(code).toBe(1);
     expect(errors[0]).toContain("Unknown command: opencode foobar");
+  });
+});
+
+// --- agent command group tests ---
+
+function createMockServerInfo(): ServerInfo {
+  return { pid: 12345, port: 4096, url: "http://127.0.0.1:4096", startedAt: "2026-01-01T00:00:00.000Z" };
+}
+
+function createMockOpenCodeClient(): OpenCodeClientInterface {
+  const sessions = new Map<string, { id: string; title: string }>();
+  let sessionSeq = 0;
+
+  return {
+    session: {
+      async create(params) {
+        sessionSeq += 1;
+        const id = `oc-sess-${sessionSeq}`;
+        const data = { id, slug: id, title: params?.title ?? "untitled" };
+        sessions.set(id, data);
+        return { data };
+      },
+      async prompt(params) {
+        return {
+          data: {
+            info: { id: `msg-1`, role: "assistant" },
+            parts: [{ type: "text", text: "Mock response" }],
+          },
+        };
+      },
+      async messages(params) {
+        return {
+          data: [
+            {
+              info: { id: "msg-0", role: "user", time: { created: Date.now() } },
+              parts: [{ type: "text", text: "Hello" }],
+            },
+            {
+              info: { id: "msg-1", role: "assistant", time: { created: Date.now() } },
+              parts: [{ type: "text", text: "Hi there" }],
+            },
+          ],
+        };
+      },
+      async delete(params) {
+        sessions.delete(params.path.id);
+      },
+    },
+  };
+}
+
+class MockAgentManager extends AgentManager {
+  private agents = new Map<string, AgentMetadata>();
+  private conversations = new Map<string, Conversation>();
+  private seq = 0;
+
+  constructor() {
+    super({ client: createMockOpenCodeClient() });
+  }
+
+  override async createAgent(
+    _workspacePath: string,
+    options: { label: string; model?: string; agent?: string },
+  ): Promise<AgentMetadata> {
+    this.seq += 1;
+    const agentId = `agent-mock${this.seq}`;
+    const metadata: AgentMetadata = {
+      agentId,
+      sessionId: `oc-sess-${this.seq}`,
+      label: options.label,
+      model: options.model,
+      agent: options.agent,
+      createdAt: new Date().toISOString(),
+    };
+    this.agents.set(agentId, metadata);
+    this.conversations.set(agentId, { agentId, sessionId: metadata.sessionId, messages: [] });
+    return metadata;
+  }
+
+  override async listAgents(_workspacePath: string): Promise<AgentMetadata[]> {
+    return Array.from(this.agents.values());
+  }
+
+  override async getAgent(_workspacePath: string, agentId: string): Promise<AgentMetadata> {
+    const agent = this.agents.get(agentId);
+    if (!agent) throw new Error(`Agent "${agentId}" not found.`);
+    return agent;
+  }
+
+  override async removeAgent(_workspacePath: string, agentId: string): Promise<void> {
+    this.agents.delete(agentId);
+    this.conversations.delete(agentId);
+  }
+
+  override async sendMessage(
+    _workspacePath: string,
+    agentId: string,
+    text: string,
+  ): Promise<ConversationMessage> {
+    const agent = this.agents.get(agentId);
+    if (!agent) throw new Error(`Agent "${agentId}" not found.`);
+    const msg: ConversationMessage = {
+      role: "assistant",
+      content: "Mock response",
+      parts: [{ type: "text", text: "Mock response" }],
+      timestamp: new Date().toISOString(),
+    };
+    const conv = this.conversations.get(agentId)!;
+    conv.messages.push(
+      { role: "user", content: text, parts: [{ type: "text", text }], timestamp: new Date().toISOString() },
+      msg,
+    );
+    return msg;
+  }
+
+  override async getConversation(_workspacePath: string, agentId: string): Promise<Conversation> {
+    const agent = this.agents.get(agentId);
+    if (!agent) throw new Error(`Agent "${agentId}" not found.`);
+    return this.conversations.get(agentId)!;
+  }
+}
+
+function createMockAgentDeps(overrides?: {
+  serverStartError?: boolean;
+  serverRunning?: boolean;
+}): { agentDeps: AgentDeps; mockManager: MockAgentManager } {
+  const mockInfo = createMockServerInfo();
+  const running = overrides?.serverRunning ?? true;
+  const mockManager = new MockAgentManager();
+
+  return {
+    mockManager,
+    agentDeps: {
+      server: {
+        async start(_workspacePath: string) {
+          if (overrides?.serverStartError) {
+            throw new Error("Failed to start server");
+          }
+          return mockInfo;
+        },
+        async stop(_workspacePath: string) {},
+        async status(_workspacePath: string) {
+          return running ? { running: true, info: mockInfo } : { running: false };
+        },
+        async getOrStart(_workspacePath: string) {
+          return mockInfo;
+        },
+      },
+      createManager(_serverUrl: string) {
+        return mockManager;
+      },
+    },
+  };
+}
+
+function setupTestCliWithAgent(agentDepsOverrides?: Parameters<typeof createMockAgentDeps>[0]) {
+  const base = setupTestCli();
+  const { agentDeps, mockManager } = createMockAgentDeps(agentDepsOverrides);
+  return {
+    ...base,
+    mockManager,
+    deps: { ...base.deps, agentDeps },
+  };
+}
+
+describe("CLI agent commands", () => {
+  it("agent server-start outputs server info", async () => {
+    const { deps, output, errors } = setupTestCliWithAgent();
+
+    const code = await runCli(["agent", "server-start"], deps);
+
+    expect(code).toBe(0);
+    expect(errors).toHaveLength(0);
+    const result = JSON.parse(output[0]) as ServerInfo;
+    expect(result.pid).toBe(12345);
+    expect(result.port).toBe(4096);
+    expect(result.url).toBe("http://127.0.0.1:4096");
+  });
+
+  it("agent server-stop outputs stopped confirmation", async () => {
+    const { deps, output, errors } = setupTestCliWithAgent();
+
+    const code = await runCli(["agent", "server-stop"], deps);
+
+    expect(code).toBe(0);
+    expect(errors).toHaveLength(0);
+    const result = JSON.parse(output[0]) as { stopped: boolean };
+    expect(result.stopped).toBe(true);
+  });
+
+  it("agent server-status when running", async () => {
+    const { deps, output, errors } = setupTestCliWithAgent({ serverRunning: true });
+
+    const code = await runCli(["agent", "server-status"], deps);
+
+    expect(code).toBe(0);
+    expect(errors).toHaveLength(0);
+    const result = JSON.parse(output[0]) as { running: boolean; info?: ServerInfo };
+    expect(result.running).toBe(true);
+    expect(result.info?.port).toBe(4096);
+  });
+
+  it("agent server-status when stopped", async () => {
+    const { deps, output, errors } = setupTestCliWithAgent({ serverRunning: false });
+
+    const code = await runCli(["agent", "server-status"], deps);
+
+    expect(code).toBe(0);
+    expect(errors).toHaveLength(0);
+    const result = JSON.parse(output[0]) as { running: boolean };
+    expect(result.running).toBe(false);
+  });
+
+  it("agent create outputs metadata", async () => {
+    const { deps, output, errors } = setupTestCliWithAgent();
+
+    const code = await runCli(["agent", "create", "--label", "my-agent", "--model", "anthropic:claude"], deps);
+
+    expect(code).toBe(0);
+    expect(errors).toHaveLength(0);
+    const result = JSON.parse(output[0]) as AgentMetadata;
+    expect(result.agentId).toMatch(/^agent-/);
+    expect(result.label).toBe("my-agent");
+    expect(result.model).toBe("anthropic:claude");
+    expect(result.sessionId).toMatch(/^oc-sess-/);
+  });
+
+  it("agent create requires --label", async () => {
+    const { deps, errors } = setupTestCliWithAgent();
+
+    const code = await runCli(["agent", "create"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("Missing required flag --label");
+  });
+
+  it("agent list outputs agents array", async () => {
+    const { deps, output, errors } = setupTestCliWithAgent();
+
+    const code = await runCli(["agent", "list"], deps);
+
+    expect(code).toBe(0);
+    expect(errors).toHaveLength(0);
+    const result = JSON.parse(output[0]) as { agents: AgentMetadata[] };
+    expect(Array.isArray(result.agents)).toBe(true);
+  });
+
+  it("agent send requires --agent-id and --message", async () => {
+    const { deps, errors } = setupTestCliWithAgent();
+
+    const code = await runCli(["agent", "send"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("Missing required flag --agent-id");
+  });
+
+  it("agent send requires --message when --agent-id is given", async () => {
+    const { deps, errors } = setupTestCliWithAgent();
+
+    const code = await runCli(["agent", "send", "--agent-id", "agent-abc"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("Missing required flag --message");
+  });
+
+  it("agent conversation requires --agent-id", async () => {
+    const { deps, errors } = setupTestCliWithAgent();
+
+    const code = await runCli(["agent", "conversation"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("Missing required flag --agent-id");
+  });
+
+  it("agent remove requires --agent-id", async () => {
+    const { deps, errors } = setupTestCliWithAgent();
+
+    const code = await runCli(["agent", "remove"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("Missing required flag --agent-id");
+  });
+
+  it("agent server-start propagates server error", async () => {
+    const { deps, errors } = setupTestCliWithAgent({ serverStartError: true });
+
+    const code = await runCli(["agent", "server-start"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("Failed to start server");
+  });
+
+  it("unknown agent subcommand errors", async () => {
+    const { deps, errors } = setupTestCliWithAgent();
+
+    const code = await runCli(["agent", "foobar"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("Unknown command: agent foobar");
+  });
+
+  it("agent commands respect --workspace-path flag", async () => {
+    const { deps, output, errors } = setupTestCliWithAgent();
+
+    const code = await runCli(
+      ["agent", "server-status", "--workspace-path", "/custom/path"],
+      deps,
+    );
+
+    expect(code).toBe(0);
+    expect(errors).toHaveLength(0);
   });
 });
