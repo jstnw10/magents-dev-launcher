@@ -51,6 +51,8 @@ export interface AgentMetadata {
   label: string;
   model?: string;
   agent?: string;
+  specialistId?: string;
+  systemPrompt?: string;
   createdAt: string;
 }
 
@@ -116,7 +118,13 @@ export class AgentManager {
 
   async createAgent(
     workspacePath: string,
-    options: { label: string; model?: string; agent?: string },
+    options: {
+      label: string;
+      model?: string;
+      agent?: string;
+      specialistId?: string;
+      systemPrompt?: string;
+    },
   ): Promise<AgentMetadata> {
     const result = await this.client.session.create({
       directory: workspacePath,
@@ -130,6 +138,8 @@ export class AgentManager {
       label: options.label,
       model: options.model,
       agent: options.agent,
+      specialistId: options.specialistId,
+      systemPrompt: options.systemPrompt,
       createdAt: new Date().toISOString(),
     };
 

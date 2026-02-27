@@ -1,8 +1,12 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, beforeEach, afterEach } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { ControlClient } from "@magents/sdk";
 
-import type { AgentDeps } from "./cli";
+import type { AgentDeps, SpecialistDeps } from "./cli";
 import { runCli } from "./cli";
+import { SpecialistRegistry, type InteractiveIO } from "./specialist-registry";
 import type { AgentMetadata, Conversation, ConversationMessage, OpenCodeClientInterface } from "./agent-manager";
 import { AgentManager } from "./agent-manager";
 import type { ServerInfo } from "./opencode-server";
@@ -822,7 +826,13 @@ class MockAgentManager extends AgentManager {
 
   override async createAgent(
     _workspacePath: string,
-    options: { label: string; model?: string; agent?: string },
+    options: {
+      label: string;
+      model?: string;
+      agent?: string;
+      specialistId?: string;
+      systemPrompt?: string;
+    },
   ): Promise<AgentMetadata> {
     this.seq += 1;
     const agentId = `agent-mock${this.seq}`;
@@ -832,6 +842,8 @@ class MockAgentManager extends AgentManager {
       label: options.label,
       model: options.model,
       agent: options.agent,
+      specialistId: options.specialistId,
+      systemPrompt: options.systemPrompt,
       createdAt: new Date().toISOString(),
     };
     this.agents.set(agentId, metadata);
@@ -1071,5 +1083,304 @@ describe("CLI agent commands", () => {
 
     expect(code).toBe(0);
     expect(errors).toHaveLength(0);
+  });
+});
+
+// --- specialist command group tests + agent create --specialist tests ---
+
+function makeSpecialistMd(opts: {
+  name: string;
+  description: string;
+  modelTier?: string;
+  roleReminder?: string;
+  defaultModel?: string;
+  body: string;
+}): string {
+  const lines = ["---"];
+  lines.push(`name: "${opts.name}"`);
+  lines.push(`description: "${opts.description}"`);
+  if (opts.modelTier) lines.push(`modelTier: "${opts.modelTier}"`);
+  if (opts.roleReminder) lines.push(`roleReminder: "${opts.roleReminder}"`);
+  if (opts.defaultModel) lines.push(`defaultModel: "${opts.defaultModel}"`);
+  lines.push("---");
+  lines.push("");
+  lines.push(opts.body);
+  return lines.join("\n");
+}
+
+async function writeSpecialist(dir: string, id: string, content: string) {
+  await Bun.write(path.join(dir, `${id}.md`), content);
+}
+
+function createMockIO(responses: {
+  prompts?: string[];
+  editorContent?: string;
+  confirms?: boolean[];
+}): InteractiveIO {
+  let promptIdx = 0;
+  let confirmIdx = 0;
+  return {
+    async prompt(_question: string) {
+      return responses.prompts?.[promptIdx++] ?? "";
+    },
+    async openEditor(_initialContent?: string) {
+      return responses.editorContent ?? "";
+    },
+    async confirm(_question: string) {
+      return responses.confirms?.[confirmIdx++] ?? false;
+    },
+  };
+}
+
+describe("CLI specialist commands", () => {
+  let builtinDir: string;
+  let userDir: string;
+
+  beforeEach(async () => {
+    builtinDir = await mkdtemp(path.join(os.tmpdir(), "magents-cli-builtin-"));
+    userDir = await mkdtemp(path.join(os.tmpdir(), "magents-cli-user-"));
+  });
+
+  afterEach(async () => {
+    await rm(builtinDir, { recursive: true, force: true });
+    await rm(userDir, { recursive: true, force: true });
+  });
+
+  function setupTestCliWithSpecialist(opts?: {
+    io?: InteractiveIO;
+    agentDepsOverrides?: Parameters<typeof createMockAgentDeps>[0];
+  }) {
+    const base = setupTestCli();
+    const { agentDeps, mockManager } = createMockAgentDeps(opts?.agentDepsOverrides);
+    const registry = new SpecialistRegistry({ builtinDir, userDir });
+    const specialistDeps: SpecialistDeps = {
+      registry,
+      io: opts?.io,
+    };
+    return {
+      ...base,
+      mockManager,
+      registry,
+      deps: { ...base.deps, agentDeps, specialistDeps },
+    };
+  }
+
+  it("agent create --specialist coordinator resolves from registry", async () => {
+    await writeSpecialist(
+      builtinDir,
+      "coordinator",
+      makeSpecialistMd({
+        name: "Coordinator",
+        description: "Plans and delegates",
+        defaultModel: "claude-sonnet-4-5-20250929",
+        body: "You are a coordinator.",
+      }),
+    );
+
+    const { deps, output, errors } = setupTestCliWithSpecialist();
+
+    const code = await runCli(["agent", "create", "--specialist", "coordinator"], deps);
+
+    expect(code).toBe(0);
+    expect(errors).toHaveLength(0);
+    const result = JSON.parse(output[0]) as AgentMetadata;
+    expect(result.label).toBe("Coordinator");
+    expect(result.model).toBe("claude-sonnet-4-5-20250929");
+    expect(result.specialistId).toBe("coordinator");
+    expect(result.systemPrompt).toBe("You are a coordinator.");
+  });
+
+  it("agent create --specialist coordinator --label custom uses custom label", async () => {
+    await writeSpecialist(
+      builtinDir,
+      "coordinator",
+      makeSpecialistMd({
+        name: "Coordinator",
+        description: "Plans and delegates",
+        body: "You are a coordinator.",
+      }),
+    );
+
+    const { deps, output, errors } = setupTestCliWithSpecialist();
+
+    const code = await runCli(
+      ["agent", "create", "--specialist", "coordinator", "--label", "MyCoord"],
+      deps,
+    );
+
+    expect(code).toBe(0);
+    expect(errors).toHaveLength(0);
+    const result = JSON.parse(output[0]) as AgentMetadata;
+    expect(result.label).toBe("MyCoord");
+  });
+
+  it("agent create --specialist unknown errors with available specialists", async () => {
+    await writeSpecialist(
+      builtinDir,
+      "coordinator",
+      makeSpecialistMd({
+        name: "Coordinator",
+        description: "Plans and delegates",
+        body: "You are a coordinator.",
+      }),
+    );
+
+    const { deps, errors } = setupTestCliWithSpecialist();
+
+    const code = await runCli(["agent", "create", "--specialist", "unknown"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("SPECIALIST_NOT_FOUND");
+    expect(errors[0]).toContain("coordinator");
+  });
+
+  it("specialist list shows specialists", async () => {
+    await writeSpecialist(
+      builtinDir,
+      "coordinator",
+      makeSpecialistMd({
+        name: "Coordinator",
+        description: "Plans and delegates",
+        body: "You are a coordinator.",
+      }),
+    );
+    await writeSpecialist(
+      userDir,
+      "my-reviewer",
+      makeSpecialistMd({
+        name: "My Reviewer",
+        description: "Reviews code with security focus",
+        body: "Review carefully.",
+      }),
+    );
+
+    const { deps, output, errors } = setupTestCliWithSpecialist();
+
+    const code = await runCli(["specialist", "list"], deps);
+
+    expect(code).toBe(0);
+    expect(errors).toHaveLength(0);
+    expect(output[0]).toContain("ID");
+    expect(output[0]).toContain("NAME");
+    expect(output[0]).toContain("SOURCE");
+    expect(output[0]).toContain("coordinator");
+    expect(output[0]).toContain("builtin");
+    expect(output[0]).toContain("my-reviewer");
+    expect(output[0]).toContain("user");
+  });
+
+  it("specialist add creates user specialist via editor", async () => {
+    const editorContent = makeSpecialistMd({
+      name: "My Agent",
+      description: "A custom specialist",
+      body: "You are my custom agent.",
+    });
+
+    const io = createMockIO({
+      prompts: ["my-agent"],
+      editorContent,
+      confirms: [true],
+    });
+
+    const { deps, output, errors, registry } = setupTestCliWithSpecialist({ io });
+
+    const code = await runCli(["specialist", "add"], deps);
+
+    expect(code).toBe(0);
+    expect(errors).toHaveLength(0);
+    const result = JSON.parse(output[0]);
+    expect(result.added).toBe(true);
+    expect(result.id).toBe("my-agent");
+
+    // Verify it was actually saved
+    const saved = await registry.get("my-agent");
+    expect(saved).not.toBeNull();
+    expect(saved!.name).toBe("My Agent");
+    expect(saved!.description).toBe("A custom specialist");
+    expect(saved!.systemPrompt).toBe("You are my custom agent.");
+  });
+
+  it("specialist add aborts if user declines confirmation", async () => {
+    const editorContent = makeSpecialistMd({
+      name: "Test",
+      description: "Test specialist",
+      body: "Prompt content.",
+    });
+
+    const io = createMockIO({
+      prompts: ["my-agent"],
+      editorContent,
+      confirms: [false],
+    });
+
+    const { deps, output } = setupTestCliWithSpecialist({ io });
+
+    const code = await runCli(["specialist", "add"], deps);
+
+    expect(code).toBe(0);
+    expect(output[0]).toBe("Aborted.");
+  });
+
+  it("specialist add errors without interactive IO", async () => {
+    const { deps, errors } = setupTestCliWithSpecialist();
+
+    const code = await runCli(["specialist", "add"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("NO_INTERACTIVE_IO");
+  });
+
+  it("specialist remove --name my-agent removes user specialist", async () => {
+    await writeSpecialist(
+      userDir,
+      "my-agent",
+      makeSpecialistMd({
+        name: "My Agent",
+        description: "Custom specialist",
+        body: "Custom prompt.",
+      }),
+    );
+
+    const { deps, output, errors, registry } = setupTestCliWithSpecialist();
+
+    const code = await runCli(["specialist", "remove", "--name", "my-agent"], deps);
+
+    expect(code).toBe(0);
+    expect(errors).toHaveLength(0);
+    const result = JSON.parse(output[0]);
+    expect(result.removed).toBe(true);
+    expect(result.name).toBe("my-agent");
+
+    // Verify it was actually removed
+    const removed = await registry.get("my-agent");
+    expect(removed).toBeNull();
+  });
+
+  it("specialist remove refuses for built-in specialists", async () => {
+    await writeSpecialist(
+      builtinDir,
+      "coordinator",
+      makeSpecialistMd({
+        name: "Coordinator",
+        description: "Built-in",
+        body: "Coordinator prompt.",
+      }),
+    );
+
+    const { deps, errors } = setupTestCliWithSpecialist();
+
+    const code = await runCli(["specialist", "remove", "--name", "coordinator"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("BUILTIN_SPECIALIST");
+  });
+
+  it("specialist remove requires --name", async () => {
+    const { deps, errors } = setupTestCliWithSpecialist();
+
+    const code = await runCli(["specialist", "remove"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("Missing required flag --name");
   });
 });
