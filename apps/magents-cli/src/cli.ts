@@ -25,6 +25,7 @@ import { AgentManager } from "./agent-manager";
 import { SpecialistRegistry, type InteractiveIO } from "./specialist-registry";
 import { OpenCodeServer } from "./opencode-server";
 import { createOpenCodeClient } from "./opencode-client";
+import { createMcpServer } from "./mcp/server";
 
 export interface AgentDeps {
   readonly server: Pick<OpenCodeServer, "start" | "stop" | "status" | "getOrStart">;
@@ -148,7 +149,7 @@ export async function runCli(argv: string[], deps?: CliDependencies) {
   const resolvedDeps = deps ?? (await createDefaultDeps());
 
   if (argv.length === 0) {
-    resolvedDeps.stderr("Usage: magents <session|worktree|tunnel|workspace|opencode|agent|specialist|init|link> <command> [options]");
+    resolvedDeps.stderr("Usage: magents <session|worktree|tunnel|workspace|opencode|agent|specialist|mcp|init|link> <command> [options]");
     return 1;
   }
 
@@ -520,6 +521,16 @@ export async function runCli(argv: string[], deps?: CliDependencies) {
           }
           await specialistRegistry.remove(name);
           resolvedDeps.stdout(json({ removed: true, name }));
+          return 0;
+        }
+
+        break;
+      }
+      case "mcp": {
+        if (command === "serve") {
+          const workspacePath = parseValue(args, "--workspace-path") ?? resolvedDeps.cwd;
+          const server = createMcpServer(workspacePath);
+          await server.start();
           return 0;
         }
 

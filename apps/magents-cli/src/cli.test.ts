@@ -1384,3 +1384,25 @@ describe("CLI specialist commands", () => {
     expect(errors[0]).toContain("Missing required flag --name");
   });
 });
+
+// --- mcp command group tests ---
+
+describe("CLI mcp commands", () => {
+  it("unknown mcp subcommand errors", async () => {
+    const { deps, errors } = setupTestCli();
+
+    const code = await runCli(["mcp", "foobar"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("Unknown command: mcp foobar");
+  });
+
+  it("mcp without subcommand errors", async () => {
+    const { deps, errors } = setupTestCli();
+
+    const code = await runCli(["mcp"], deps);
+
+    expect(code).toBe(1);
+    expect(errors[0]).toContain("Unknown command: mcp");
+  });
+});
