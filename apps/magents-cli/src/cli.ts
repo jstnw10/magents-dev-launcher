@@ -529,7 +529,18 @@ export async function runCli(argv: string[], deps?: CliDependencies) {
       case "mcp": {
         if (command === "serve") {
           const workspacePath = parseValue(args, "--workspace-path") ?? resolvedDeps.cwd;
-          const server = createMcpServer(workspacePath);
+          const openCodeServer = resolvedDeps.agentDeps?.server ?? new OpenCodeServer();
+          const createManager = resolvedDeps.agentDeps?.createManager ?? ((url: string) => new AgentManager({ client: createOpenCodeClient(url) }));
+          const specialistRegistry = resolvedDeps.specialistDeps?.registry ?? new SpecialistRegistry();
+
+          const server = createMcpServer(workspacePath, {
+            getAgentManager: async () => {
+              const serverInfo = await openCodeServer.getOrStart(workspacePath);
+              const manager = createManager(serverInfo.url);
+              return { manager, serverUrl: serverInfo.url };
+            },
+            specialistRegistry,
+          });
           await server.start();
           return 0;
         }

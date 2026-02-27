@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import type { ToolContext } from "./types.js";
+import { registerAgentTools } from "./agent-tools.js";
 import { registerGitTools } from "./git-tools.js";
 import { registerNoteTools } from "./note-tools.js";
 import { registerTaskTools } from "./task-tools.js";
@@ -13,8 +14,8 @@ export class MagentsMcpServer {
   readonly mcpServer: McpServer;
   private readonly context: ToolContext;
 
-  constructor(workspacePath: string) {
-    this.context = { workspacePath };
+  constructor(workspacePath: string, contextOverrides?: Partial<Omit<ToolContext, "workspacePath">>) {
+    this.context = { workspacePath, ...contextOverrides };
     this.mcpServer = new McpServer({
       name: "magents-workspace",
       version: "0.1.0",
@@ -46,8 +47,18 @@ function registerPingTool(server: McpServer, context: ToolContext): void {
   });
 }
 
-export function createMcpServer(workspacePath: string): MagentsMcpServer {
-  const server = new MagentsMcpServer(workspacePath);
-  server.registerTools([registerPingTool, registerGitTools, registerNoteTools, registerTaskTools, registerWorkspaceTools]);
+export function createMcpServer(
+  workspacePath: string,
+  contextOverrides?: Partial<Omit<ToolContext, "workspacePath">>,
+): MagentsMcpServer {
+  const server = new MagentsMcpServer(workspacePath, contextOverrides);
+  server.registerTools([
+    registerPingTool,
+    registerAgentTools,
+    registerGitTools,
+    registerNoteTools,
+    registerTaskTools,
+    registerWorkspaceTools,
+  ]);
   return server;
 }
