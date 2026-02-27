@@ -9,6 +9,9 @@ import { registerNoteTools } from "./note-tools.js";
 import { registerPrTools } from "./pr-tools.js";
 import { registerTaskTools } from "./task-tools.js";
 import { registerPrimitiveTools } from "./primitive-tools.js";
+import { registerEventTools } from "./event-tools.js";
+import { registerCrossWorkspaceTools } from "./cross-workspace-tools.js";
+import { registerTerminalTools } from "./terminal-tools.js";
 import { registerWorkspaceTools } from "./workspace-tools.js";
 
 export type ToolRegistration = (server: McpServer, context: ToolContext) => void;
@@ -63,7 +66,10 @@ export function createMcpServer(
     registerNoteTools,
     registerPrTools,
     registerPrimitiveTools,
+    registerEventTools,
     registerTaskTools,
+    registerCrossWorkspaceTools,
+    registerTerminalTools,
     registerWorkspaceTools,
   ]);
   return server;
