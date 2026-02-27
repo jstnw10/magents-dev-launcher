@@ -1,4 +1,4 @@
-import { mkdir, unlink } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -152,7 +152,7 @@ export class SpecialistRegistry {
         `Specialist "${id}" not found.`,
       );
     }
-    await unlink(path.join(this.userDir, `${id}.md`));
+    await Bun.file(path.join(this.userDir, `${id}.md`)).delete();
   }
 
   private async scanDir(

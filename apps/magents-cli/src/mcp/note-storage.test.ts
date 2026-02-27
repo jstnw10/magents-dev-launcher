@@ -104,6 +104,28 @@ describe("note-storage", () => {
     });
   });
 
+  describe("path traversal defense", () => {
+    it("loadNote rejects traversal IDs", async () => {
+      expect(() => loadNote(tmpDir, "../../etc/passwd")).toThrow("Invalid ID");
+    });
+
+    it("deleteNote rejects traversal IDs", async () => {
+      expect(() => deleteNote(tmpDir, "../secret")).toThrow("Invalid ID");
+    });
+
+    it("saveNote rejects traversal IDs", async () => {
+      const note: Note = {
+        id: "foo/bar",
+        title: "Bad",
+        content: "",
+        tags: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      expect(() => saveNote(tmpDir, note)).toThrow("Invalid ID");
+    });
+  });
+
   describe("getOrCreateSpecNote", () => {
     it("creates spec note if missing", async () => {
       const spec = await getOrCreateSpecNote(tmpDir);

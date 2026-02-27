@@ -8,6 +8,7 @@ import {
   deleteComment,
   getCommentsByThread,
   loadComments,
+  saveComments,
   type Comment,
 } from "./comment-storage";
 
@@ -84,6 +85,16 @@ describe("comment-storage", () => {
       const remaining = await loadComments(tmpDir, "note-1");
       expect(remaining).toHaveLength(1);
       expect(remaining[0].content).toBe("Comment 2");
+    });
+  });
+
+  describe("path traversal defense", () => {
+    it("loadComments rejects traversal IDs", async () => {
+      expect(() => loadComments(tmpDir, "../../etc/passwd")).toThrow("Invalid ID");
+    });
+
+    it("saveComments rejects traversal IDs", async () => {
+      expect(() => saveComments(tmpDir, "../secret", [])).toThrow("Invalid ID");
     });
   });
 

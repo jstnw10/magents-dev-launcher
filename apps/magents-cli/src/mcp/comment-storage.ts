@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { mkdir } from "node:fs/promises";
+import { sanitizeId } from "./utils";
 
 export interface Comment {
   id: string;
@@ -28,6 +29,7 @@ export async function loadComments(
   workspacePath: string,
   noteId: string,
 ): Promise<Comment[]> {
+  sanitizeId(noteId);
   const filePath = join(getCommentsDir(workspacePath), `${noteId}.json`);
   const file = Bun.file(filePath);
   if (!(await file.exists())) return [];
@@ -39,6 +41,7 @@ export async function saveComments(
   noteId: string,
   comments: Comment[],
 ): Promise<void> {
+  sanitizeId(noteId);
   await ensureCommentsDir(workspacePath);
   const filePath = join(getCommentsDir(workspacePath), `${noteId}.json`);
   await Bun.write(filePath, JSON.stringify(comments, null, 2) + "\n");

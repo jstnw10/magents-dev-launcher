@@ -78,8 +78,9 @@ export interface AgentManagerOptions {
 // --- Helpers ---
 
 function generateAgentId(): string {
-  const uuid = crypto.randomUUID().replace(/-/g, "");
-  return `agent-${uuid.slice(0, 8)}`;
+  const uuid = Bun.randomUUIDv7().replace(/-/g, "");
+  // Skip the timestamp prefix (first 12 hex chars) and use the random portion
+  return `agent-${uuid.slice(12, 20)}`;
 }
 
 function agentsDir(workspacePath: string): string {
@@ -203,16 +204,14 @@ export class AgentManager {
     const metaFile = agentFilePath(workspacePath, agentId);
     const meta = Bun.file(metaFile);
     if (await meta.exists()) {
-      const { unlink } = await import("node:fs/promises");
-      await unlink(metaFile);
+      await Bun.file(metaFile).delete();
     }
 
     // Remove conversation file if it exists
     const convFile = conversationFilePath(workspacePath, agentId);
     const conv = Bun.file(convFile);
     if (await conv.exists()) {
-      const { unlink } = await import("node:fs/promises");
-      await unlink(convFile);
+      await Bun.file(convFile).delete();
     }
   }
 

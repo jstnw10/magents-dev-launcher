@@ -84,4 +84,14 @@ describe("subscription-storage", () => {
     const subs = await listSubscriptions(tmpDir);
     expect(subs).toHaveLength(0);
   });
+
+  describe("path traversal defense", () => {
+    it("getSubscription rejects traversal IDs", async () => {
+      expect(() => getSubscription(tmpDir, "../../etc/passwd")).toThrow("Invalid ID");
+    });
+
+    it("deleteSubscription rejects traversal IDs", async () => {
+      expect(() => deleteSubscription(tmpDir, "../secret")).toThrow("Invalid ID");
+    });
+  });
 });

@@ -6,6 +6,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { ToolContext } from "./types.js";
 import { listNotes, loadNote } from "./note-storage.js";
+import { runGit } from "./git-utils.js";
 
 interface WorkspaceEntry {
   id: string;
@@ -18,20 +19,6 @@ interface SiblingWorkspace {
   title: string | null;
   branch: string | null;
   workspacePath: string;
-}
-
-async function runGit(
-  args: string[],
-  cwd: string,
-): Promise<{ stdout: string; exitCode: number }> {
-  const proc = Bun.spawn(["git", ...args], {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const stdout = await new Response(proc.stdout).text();
-  const exitCode = await proc.exited;
-  return { stdout: stdout.trimEnd(), exitCode };
 }
 
 async function getRepoRoot(cwd: string): Promise<string | null> {

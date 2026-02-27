@@ -383,12 +383,14 @@ describe("resolve_pr_review_thread", () => {
     expect(result.threadId).toBe("PRRT_thread1");
     expect(result.resolved).toBe(true);
 
-    // Verify GraphQL mutation was sent
+    // Verify GraphQL mutation uses variable declaration (not string interpolation)
     const queryArg = harness.calls[0].args.find((a) =>
       a.startsWith("query="),
     );
-    expect(queryArg).toContain("resolveReviewThread");
-    expect(queryArg).toContain("PRRT_thread1");
+    expect(queryArg).toContain("$threadId: ID!");
+    expect(queryArg).toContain("threadId: $threadId");
+    // Verify threadId passed as a separate variable argument
+    expect(harness.calls[0].args).toContain("threadId=PRRT_thread1");
   });
 
   it("returns error on GraphQL failure", async () => {

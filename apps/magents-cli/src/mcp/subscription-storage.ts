@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { mkdir, readdir } from "node:fs/promises";
+import { sanitizeId } from "./utils";
 
 export interface Subscription {
   id: string;
@@ -45,6 +46,7 @@ export async function createSubscription(
     id: Bun.randomUUIDv7(),
     createdAt: new Date().toISOString(),
   };
+  sanitizeId(full.id);
   const filePath = join(getSubscriptionsDir(workspacePath), `${full.id}.json`);
   await Bun.write(filePath, JSON.stringify(full, null, 2) + "\n");
   return full;
@@ -54,6 +56,7 @@ export async function deleteSubscription(
   workspacePath: string,
   id: string,
 ): Promise<boolean> {
+  sanitizeId(id);
   const filePath = join(getSubscriptionsDir(workspacePath), `${id}.json`);
   const file = Bun.file(filePath);
   if (!(await file.exists())) return false;
@@ -65,6 +68,7 @@ export async function getSubscription(
   workspacePath: string,
   id: string,
 ): Promise<Subscription | null> {
+  sanitizeId(id);
   const filePath = join(getSubscriptionsDir(workspacePath), `${id}.json`);
   const file = Bun.file(filePath);
   if (!(await file.exists())) return null;

@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { ToolContext } from "./types.js";
+import { runGit } from "./git-utils.js";
 
 interface StatusEntry {
   path: string;
@@ -82,22 +83,6 @@ function parseGitStatus(output: string): GitStatusResult {
   }
 
   return result;
-}
-
-async function runGit(
-  args: string[],
-  cwd: string,
-): Promise<{ stdout: string; exitCode: number }> {
-  const proc = Bun.spawn(["git", ...args], {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  const stdout = await new Response(proc.stdout).text();
-  const exitCode = await proc.exited;
-
-  return { stdout: stdout.trimEnd(), exitCode };
 }
 
 const DISALLOWED_STAGE_PATHS = new Set([".", "*", "-A", "--all"]);

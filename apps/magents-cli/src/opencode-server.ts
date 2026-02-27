@@ -233,8 +233,7 @@ export class OpenCodeServer {
   private async removeServerInfo(workspacePath: string): Promise<void> {
     const infoPath = serverInfoPath(workspacePath);
     try {
-      const { unlink } = await import("node:fs/promises");
-      await unlink(infoPath);
+      await Bun.file(infoPath).delete();
     } catch {
       // File may already be gone
     }

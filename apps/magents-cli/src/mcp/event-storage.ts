@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { mkdir, readdir } from "node:fs/promises";
+import { appendFile, mkdir, readdir } from "node:fs/promises";
+import { runGit } from "./git-utils.js";
 
 export interface WorkspaceEvent {
   id: string;
@@ -39,15 +40,7 @@ export async function appendEvent(
     timestamp: new Date().toISOString(),
   };
 
-  const line = JSON.stringify(full) + "\n";
-
-  const file = Bun.file(filePath);
-  let existing = "";
-  if (await file.exists()) {
-    existing = await file.text();
-  }
-
-  await Bun.write(filePath, existing + line);
+  await appendFile(filePath, JSON.stringify(full) + "\n");
   return full;
 }
 
@@ -112,22 +105,6 @@ export async function queryEvents(
   }
 
   return filtered;
-}
-
-async function runGit(
-  args: string[],
-  cwd: string,
-): Promise<{ stdout: string; exitCode: number }> {
-  const proc = Bun.spawn(["git", ...args], {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  const stdout = await new Response(proc.stdout).text();
-  const exitCode = await proc.exited;
-
-  return { stdout: stdout.trimEnd(), exitCode };
 }
 
 export async function getRecentFiles(

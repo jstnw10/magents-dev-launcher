@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { mkdir, readdir } from "node:fs/promises";
+import { sanitizeId } from "./utils";
 
 export interface TaskMetadata {
   status: string;
@@ -30,6 +31,7 @@ export async function loadNote(
   workspacePath: string,
   id: string,
 ): Promise<Note | null> {
+  sanitizeId(id);
   const filePath = join(getNotesDir(workspacePath), `${id}.json`);
   const file = Bun.file(filePath);
   if (!(await file.exists())) return null;
@@ -40,6 +42,7 @@ export async function saveNote(
   workspacePath: string,
   note: Note,
 ): Promise<void> {
+  sanitizeId(note.id);
   await ensureNotesDir(workspacePath);
   const filePath = join(getNotesDir(workspacePath), `${note.id}.json`);
   await Bun.write(filePath, JSON.stringify(note, null, 2) + "\n");
@@ -73,6 +76,7 @@ export async function deleteNote(
   workspacePath: string,
   id: string,
 ): Promise<void> {
+  sanitizeId(id);
   const filePath = join(getNotesDir(workspacePath), `${id}.json`);
   await Bun.file(filePath).delete();
 }

@@ -320,14 +320,14 @@ export function registerPrTools(
       threadId: z.string().describe("The GraphQL thread ID to resolve"),
     },
     async ({ threadId }) => {
-      const query = `mutation {
-  resolveReviewThread(input: { threadId: "${threadId}" }) {
+      const query = `mutation($threadId: ID!) {
+  resolveReviewThread(input: { threadId: $threadId }) {
     thread { id isResolved }
   }
 }`;
 
       const result = await runGh(
-        ["api", "graphql", "-f", `query=${query}`],
+        ["api", "graphql", "-f", `query=${query}`, "-f", `threadId=${threadId}`],
         cwd,
       );
 
