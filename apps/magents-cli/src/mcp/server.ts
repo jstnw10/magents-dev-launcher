@@ -6,6 +6,7 @@ import { registerAgentTools } from "./agent-tools.js";
 import { registerCommentTools } from "./comment-tools.js";
 import { registerGitTools } from "./git-tools.js";
 import { registerNoteTools } from "./note-tools.js";
+import { registerPrTools } from "./pr-tools.js";
 import { registerTaskTools } from "./task-tools.js";
 import { registerPrimitiveTools } from "./primitive-tools.js";
 import { registerWorkspaceTools } from "./workspace-tools.js";
@@ -60,6 +61,7 @@ export function createMcpServer(
     registerCommentTools,
     registerGitTools,
     registerNoteTools,
+    registerPrTools,
     registerPrimitiveTools,
     registerTaskTools,
     registerWorkspaceTools,
