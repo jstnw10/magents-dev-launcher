@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolContext } from "./types.js";
-import { loadNote, saveNote } from "./note-storage.js";
+import { loadNote, saveNote, createNote } from "./note-storage.js";
 
 interface ParsedTask {
   line: number;
@@ -368,6 +368,194 @@ function registerGetMyTask(server: McpServer, context: ToolContext): void {
   );
 }
 
+const TASK_BLOCK_REGEX = /@@@task\n([\s\S]*?)@@@/g;
+const TASK_FENCE_REGEX = /```task\n([\s\S]*?)```/g;
+
+function registerConvertTaskBlocks(server: McpServer, context: ToolContext): void {
+  server.tool(
+    "convert_task_blocks",
+    "Convert all task blocks (@@@task or ```task) in a note into linked Task Notes.",
+    {
+      noteId: z.string().describe("The ID of the note to convert"),
+    },
+    async ({ noteId }) => {
+      const note = await loadNote(context.workspacePath, noteId);
+      if (!note) {
+        return {
+          content: [{ type: "text", text: `Error: Note "${noteId}" not found.` }],
+          isError: true,
+        };
+      }
+
+      // Collect all matches with their positions
+      const matches: Array<{ start: number; end: number; body: string }> = [];
+
+      for (const regex of [TASK_BLOCK_REGEX, TASK_FENCE_REGEX]) {
+        regex.lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = regex.exec(note.content)) !== null) {
+          matches.push({
+            start: match.index,
+            end: match.index + match[0].length,
+            body: match[1],
+          });
+        }
+      }
+
+      if (matches.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ noteId, convertedCount: 0, createdNoteIds: [] }),
+            },
+          ],
+        };
+      }
+
+      // Sort by position descending so we can replace from the end
+      matches.sort((a, b) => b.start - a.start);
+
+      const createdNoteIds: string[] = [];
+      let content = note.content;
+
+      for (const m of matches) {
+        const lines = m.body.trim().split("\n");
+
+        // Extract title from first # heading
+        let title = "Untitled Task";
+        let bodyStartIndex = 0;
+        if (lines.length > 0 && lines[0].startsWith("# ")) {
+          title = lines[0].replace(/^#\s+/, "");
+          bodyStartIndex = 1;
+        }
+
+        const body = lines.slice(bodyStartIndex).join("\n").trim();
+
+        const newNote = await createNote(context.workspacePath, title, body);
+        newNote.taskMetadata = { status: "not_started" };
+        await saveNote(context.workspacePath, newNote);
+        createdNoteIds.push(newNote.id);
+
+        const replacement = `- [ ] [${title}](intent://local/task/${newNote.id})`;
+        content = content.slice(0, m.start) + replacement + content.slice(m.end);
+      }
+
+      note.content = content;
+      note.updatedAt = new Date().toISOString();
+      await saveNote(context.workspacePath, note);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              noteId,
+              convertedCount: createdNoteIds.length,
+              createdNoteIds,
+            }),
+          },
+        ],
+      };
+    },
+  );
+}
+
+function registerCreatePrerequisite(server: McpServer, context: ToolContext): void {
+  server.tool(
+    "create_prerequisite",
+    "Create a new prerequisite task note and link it as a dependency to an existing task.",
+    {
+      dependentNoteId: z.string().describe("The ID of the task that depends on this prerequisite"),
+      title: z.string().describe("Title for the new prerequisite task"),
+      content: z.string().optional().describe("Content/description for the prerequisite task"),
+      status: z.string().optional().describe("Initial status for the prerequisite"),
+    },
+    async ({ dependentNoteId, title, content, status }) => {
+      const dependentNote = await loadNote(context.workspacePath, dependentNoteId);
+      if (!dependentNote) {
+        return {
+          content: [{ type: "text", text: `Error: Note "${dependentNoteId}" not found.` }],
+          isError: true,
+        };
+      }
+
+      const prerequisiteNote = await createNote(context.workspacePath, title, content || "");
+      prerequisiteNote.taskMetadata = { status: status || "not_started" };
+      await saveNote(context.workspacePath, prerequisiteNote);
+
+      if (!dependentNote.taskMetadata) {
+        dependentNote.taskMetadata = { status: "not_started" };
+      }
+      if (!dependentNote.taskMetadata.dependencies) {
+        dependentNote.taskMetadata.dependencies = [];
+      }
+      dependentNote.taskMetadata.dependencies.push({
+        prerequisiteNoteId: prerequisiteNote.id,
+        status: "pending",
+      });
+      dependentNote.updatedAt = new Date().toISOString();
+      await saveNote(context.workspacePath, dependentNote);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              prerequisiteNoteId: prerequisiteNote.id,
+              dependentNoteId,
+              title,
+            }),
+          },
+        ],
+      };
+    },
+  );
+}
+
+function registerAssignAgent(server: McpServer, context: ToolContext): void {
+  server.tool(
+    "assign_agent",
+    "Assign an existing agent to a task note. Multiple agents can be assigned to the same task.",
+    {
+      noteId: z.string().describe("The ID of the task note"),
+      agentId: z.string().describe("The ID of the agent to assign"),
+    },
+    async ({ noteId, agentId }) => {
+      const note = await loadNote(context.workspacePath, noteId);
+      if (!note) {
+        return {
+          content: [{ type: "text", text: `Error: Note "${noteId}" not found.` }],
+          isError: true,
+        };
+      }
+
+      if (!note.taskMetadata) {
+        note.taskMetadata = { status: "not_started" };
+      }
+      if (!note.taskMetadata.assignedAgents) {
+        note.taskMetadata.assignedAgents = [];
+      }
+
+      if (!note.taskMetadata.assignedAgents.includes(agentId)) {
+        note.taskMetadata.assignedAgents.push(agentId);
+      }
+
+      note.updatedAt = new Date().toISOString();
+      await saveNote(context.workspacePath, note);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ noteId, agentId, assigned: true }),
+          },
+        ],
+      };
+    },
+  );
+}
+
 export function registerTaskTools(
   server: McpServer,
   context: ToolContext,
@@ -378,4 +566,7 @@ export function registerTaskTools(
   registerMarkAsTask(server, context);
   registerUpdateNoteTaskStatus(server, context);
   registerGetMyTask(server, context);
+  registerConvertTaskBlocks(server, context);
+  registerCreatePrerequisite(server, context);
+  registerAssignAgent(server, context);
 }

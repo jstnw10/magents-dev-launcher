@@ -7,7 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { MagentsMcpServer } from "./server";
 import { registerTaskTools } from "./task-tools";
-import { saveNote, loadNote, type Note } from "./note-storage";
+import { saveNote, loadNote, listNotes, type Note } from "./note-storage";
 
 function parseToolResult(result: { content: unknown }): unknown {
   const content = result.content as Array<{ type: string; text: string }>;
@@ -404,6 +404,352 @@ describe("task-tools", () => {
       const parsed = parseToolResult(result) as { taskMetadata: unknown };
 
       expect(parsed.taskMetadata).toBeNull();
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+  });
+
+  describe("convert_task_blocks", () => {
+    it("converts @@@task blocks to linked task notes", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir);
+      const note = await createTestNote(tmpDir, {
+        content: `## Plan\n\n@@@task\n# Build auth system\nImplement authentication\n\n## Scope\nLogin + logout\n@@@\n`,
+      });
+
+      const result = await client.callTool({
+        name: "convert_task_blocks",
+        arguments: { noteId: note.id },
+      });
+      const parsed = parseToolResult(result) as {
+        noteId: string;
+        convertedCount: number;
+        createdNoteIds: string[];
+      };
+
+      expect(parsed.convertedCount).toBe(1);
+      expect(parsed.createdNoteIds).toHaveLength(1);
+
+      // Check parent note was updated with link
+      const updated = await loadNote(tmpDir, note.id);
+      expect(updated!.content).toContain(`[Build auth system](intent://local/task/${parsed.createdNoteIds[0]})`);
+      expect(updated!.content).not.toContain("@@@task");
+
+      // Check created task note
+      const taskNote = await loadNote(tmpDir, parsed.createdNoteIds[0]);
+      expect(taskNote!.title).toBe("Build auth system");
+      expect(taskNote!.content).toContain("Implement authentication");
+      expect(taskNote!.taskMetadata!.status).toBe("not_started");
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("handles multiple task blocks", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir);
+      const note = await createTestNote(tmpDir, {
+        content: `@@@task\n# First task\nDo first thing\n@@@\n\nSome text\n\n@@@task\n# Second task\nDo second thing\n@@@\n`,
+      });
+
+      const result = await client.callTool({
+        name: "convert_task_blocks",
+        arguments: { noteId: note.id },
+      });
+      const parsed = parseToolResult(result) as {
+        convertedCount: number;
+        createdNoteIds: string[];
+      };
+
+      expect(parsed.convertedCount).toBe(2);
+      expect(parsed.createdNoteIds).toHaveLength(2);
+
+      const updated = await loadNote(tmpDir, note.id);
+      expect(updated!.content).toContain("- [ ] [First task]");
+      expect(updated!.content).toContain("- [ ] [Second task]");
+      expect(updated!.content).toContain("Some text");
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("extracts title from # heading", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir);
+      const note = await createTestNote(tmpDir, {
+        content: `@@@task\n# My Custom Title\nBody content\n@@@\n`,
+      });
+
+      const result = await client.callTool({
+        name: "convert_task_blocks",
+        arguments: { noteId: note.id },
+      });
+      const parsed = parseToolResult(result) as { createdNoteIds: string[] };
+
+      const taskNote = await loadNote(tmpDir, parsed.createdNoteIds[0]);
+      expect(taskNote!.title).toBe("My Custom Title");
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it('uses "Untitled Task" when no heading', async () => {
+      const { client, server } = await setupClientAndServer(tmpDir);
+      const note = await createTestNote(tmpDir, {
+        content: `@@@task\nJust some content without a heading\n@@@\n`,
+      });
+
+      const result = await client.callTool({
+        name: "convert_task_blocks",
+        arguments: { noteId: note.id },
+      });
+      const parsed = parseToolResult(result) as { createdNoteIds: string[] };
+
+      const taskNote = await loadNote(tmpDir, parsed.createdNoteIds[0]);
+      expect(taskNote!.title).toBe("Untitled Task");
+
+      const updated = await loadNote(tmpDir, note.id);
+      expect(updated!.content).toContain("[Untitled Task]");
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("returns 0 when no task blocks found", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir);
+      const note = await createTestNote(tmpDir, {
+        content: "Just plain text\nNo task blocks here",
+      });
+
+      const result = await client.callTool({
+        name: "convert_task_blocks",
+        arguments: { noteId: note.id },
+      });
+      const parsed = parseToolResult(result) as {
+        convertedCount: number;
+        createdNoteIds: string[];
+      };
+
+      expect(parsed.convertedCount).toBe(0);
+      expect(parsed.createdNoteIds).toEqual([]);
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("also handles ```task blocks", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir);
+      const note = await createTestNote(tmpDir, {
+        content: "## Plan\n\n```task\n# Fenced task\nThis uses fenced syntax\n```\n",
+      });
+
+      const result = await client.callTool({
+        name: "convert_task_blocks",
+        arguments: { noteId: note.id },
+      });
+      const parsed = parseToolResult(result) as {
+        convertedCount: number;
+        createdNoteIds: string[];
+      };
+
+      expect(parsed.convertedCount).toBe(1);
+
+      const taskNote = await loadNote(tmpDir, parsed.createdNoteIds[0]);
+      expect(taskNote!.title).toBe("Fenced task");
+      expect(taskNote!.content).toContain("This uses fenced syntax");
+
+      const updated = await loadNote(tmpDir, note.id);
+      expect(updated!.content).not.toContain("```task");
+      expect(updated!.content).toContain("[Fenced task]");
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+  });
+
+  describe("create_prerequisite", () => {
+    it("creates prerequisite and links to dependent", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir);
+      const dependentNote = await createTestNote(tmpDir, {
+        content: "Main task",
+        taskMetadata: { status: "not_started" },
+      });
+
+      const result = await client.callTool({
+        name: "create_prerequisite",
+        arguments: {
+          dependentNoteId: dependentNote.id,
+          title: "Setup database",
+          content: "Create tables and migrations",
+        },
+      });
+      const parsed = parseToolResult(result) as {
+        prerequisiteNoteId: string;
+        dependentNoteId: string;
+        title: string;
+      };
+
+      expect(parsed.title).toBe("Setup database");
+      expect(parsed.dependentNoteId).toBe(dependentNote.id);
+
+      // Check prerequisite note was created
+      const prereq = await loadNote(tmpDir, parsed.prerequisiteNoteId);
+      expect(prereq).not.toBeNull();
+      expect(prereq!.title).toBe("Setup database");
+      expect(prereq!.content).toBe("Create tables and migrations");
+      expect(prereq!.taskMetadata!.status).toBe("not_started");
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("adds dependency to dependent note's taskMetadata", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir);
+      const dependentNote = await createTestNote(tmpDir, {
+        content: "Main task",
+        taskMetadata: { status: "in_progress" },
+      });
+
+      const result = await client.callTool({
+        name: "create_prerequisite",
+        arguments: {
+          dependentNoteId: dependentNote.id,
+          title: "Prerequisite task",
+        },
+      });
+      const parsed = parseToolResult(result) as { prerequisiteNoteId: string };
+
+      const updated = await loadNote(tmpDir, dependentNote.id);
+      expect(updated!.taskMetadata!.dependencies).toBeDefined();
+      expect(updated!.taskMetadata!.dependencies).toHaveLength(1);
+      expect(updated!.taskMetadata!.dependencies![0].prerequisiteNoteId).toBe(
+        parsed.prerequisiteNoteId,
+      );
+      expect(updated!.taskMetadata!.dependencies![0].status).toBe("pending");
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("errors when dependent note not found", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir);
+
+      const result = await client.callTool({
+        name: "create_prerequisite",
+        arguments: {
+          dependentNoteId: "nonexistent-note",
+          title: "Some prerequisite",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getToolText(result)).toContain("not found");
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("with custom status sets it on prerequisite", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir);
+      const dependentNote = await createTestNote(tmpDir, {
+        content: "Main task",
+        taskMetadata: { status: "not_started" },
+      });
+
+      const result = await client.callTool({
+        name: "create_prerequisite",
+        arguments: {
+          dependentNoteId: dependentNote.id,
+          title: "Urgent prerequisite",
+          status: "in_progress",
+        },
+      });
+      const parsed = parseToolResult(result) as { prerequisiteNoteId: string };
+
+      const prereq = await loadNote(tmpDir, parsed.prerequisiteNoteId);
+      expect(prereq!.taskMetadata!.status).toBe("in_progress");
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+  });
+
+  describe("assign_agent", () => {
+    it("adds agent to task note", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir);
+      const note = await createTestNote(tmpDir, {
+        taskMetadata: { status: "not_started" },
+      });
+
+      const result = await client.callTool({
+        name: "assign_agent",
+        arguments: { noteId: note.id, agentId: "agent-123" },
+      });
+      const parsed = parseToolResult(result) as {
+        noteId: string;
+        agentId: string;
+        assigned: boolean;
+      };
+
+      expect(parsed.assigned).toBe(true);
+      expect(parsed.agentId).toBe("agent-123");
+
+      const updated = await loadNote(tmpDir, note.id);
+      expect(updated!.taskMetadata!.assignedAgents).toContain("agent-123");
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("deduplicates agent IDs", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir);
+      const note = await createTestNote(tmpDir, {
+        taskMetadata: {
+          status: "not_started",
+          assignedAgents: ["agent-123"],
+        },
+      });
+
+      await client.callTool({
+        name: "assign_agent",
+        arguments: { noteId: note.id, agentId: "agent-123" },
+      });
+
+      const updated = await loadNote(tmpDir, note.id);
+      expect(updated!.taskMetadata!.assignedAgents).toEqual(["agent-123"]);
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("initializes taskMetadata if missing", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir);
+      const note = await createTestNote(tmpDir, {
+        content: "Plain note without metadata",
+      });
+
+      await client.callTool({
+        name: "assign_agent",
+        arguments: { noteId: note.id, agentId: "agent-456" },
+      });
+
+      const updated = await loadNote(tmpDir, note.id);
+      expect(updated!.taskMetadata).toBeDefined();
+      expect(updated!.taskMetadata!.status).toBe("not_started");
+      expect(updated!.taskMetadata!.assignedAgents).toEqual(["agent-456"]);
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("errors when note not found", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir);
+
+      const result = await client.callTool({
+        name: "assign_agent",
+        arguments: { noteId: "nonexistent", agentId: "agent-789" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getToolText(result)).toContain("not found");
 
       await client.close();
       await server.mcpServer.close();

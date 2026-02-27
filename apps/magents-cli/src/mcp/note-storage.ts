@@ -5,6 +5,7 @@ export interface TaskMetadata {
   status: string;
   acceptanceCriteria?: string[];
   assignedAgents?: string[];
+  dependencies?: Array<{ prerequisiteNoteId: string; status: string }>;
 }
 
 export interface Note {

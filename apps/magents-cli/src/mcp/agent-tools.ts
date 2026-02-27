@@ -3,6 +3,11 @@ import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolContext } from "./types.js";
 import { loadNote, saveNote } from "./note-storage.js";
+import {
+  createSubscription,
+  deleteSubscription,
+  getValidCategoryWildcards,
+} from "./subscription-storage.js";
 
 async function getManager(context: ToolContext) {
   if (!context.getAgentManager) {
@@ -433,6 +438,302 @@ function registerReportToParent(server: McpServer, context: ToolContext): void {
   );
 }
 
+function registerSubscribeToEvents(server: McpServer, context: ToolContext): void {
+  server.tool(
+    "subscribe_to_events",
+    "Subscribe to workspace events. Returns a subscription ID for later unsubscribing.",
+    {
+      eventTypes: z
+        .array(z.string())
+        .describe(
+          'Event type patterns to subscribe to. Use category wildcards like "agent:*", "file:*", etc.',
+        ),
+      excludeSelf: z
+        .boolean()
+        .optional()
+        .describe("Exclude events caused by yourself (default: true)"),
+      batchWindow: z
+        .number()
+        .optional()
+        .describe("Milliseconds to batch events before delivery (default: 500)"),
+    },
+    async ({ eventTypes, excludeSelf, batchWindow }) => {
+      if (!eventTypes || eventTypes.length === 0) {
+        return {
+          content: [{ type: "text", text: "Error: eventTypes must be a non-empty array." }],
+          isError: true,
+        };
+      }
+
+      // Expand bare "*" to all category wildcards
+      let resolved = eventTypes;
+      if (eventTypes.length === 1 && eventTypes[0] === "*") {
+        resolved = getValidCategoryWildcards();
+      }
+
+      const sub = await createSubscription(context.workspacePath, {
+        agentId: "mcp-caller",
+        agentName: "mcp-caller",
+        eventTypes: resolved,
+        excludeActorIds: excludeSelf !== false ? ["mcp-caller"] : undefined,
+        batchWindow: batchWindow ?? 500,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              subscriptionId: sub.id,
+              eventTypes: sub.eventTypes,
+            }),
+          },
+        ],
+      };
+    },
+  );
+}
+
+function registerUnsubscribeFromEvents(server: McpServer, context: ToolContext): void {
+  server.tool(
+    "unsubscribe_from_events",
+    "Unsubscribe from workspace events using a subscription ID.",
+    {
+      subscriptionId: z.string().describe("The subscription ID to cancel"),
+    },
+    async ({ subscriptionId }) => {
+      const removed = await deleteSubscription(context.workspacePath, subscriptionId);
+      if (!removed) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: Subscription "${subscriptionId}" not found.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: "text", text: JSON.stringify({ unsubscribed: true }) }],
+      };
+    },
+  );
+}
+
+function registerGetAgentSummary(server: McpServer, context: ToolContext): void {
+  server.tool(
+    "get_agent_summary",
+    "Get a summary of what another agent did, including status, last response, and tool call counts.",
+    {
+      agentId: z.string().describe("ID of the agent to summarize"),
+    },
+    async ({ agentId }) => {
+      const agentsDir = join(context.workspacePath, ".workspace", "opencode", "agents");
+      const conversationsDir = join(context.workspacePath, ".workspace", "opencode", "conversations");
+
+      // Load agent metadata
+      const metadataFile = Bun.file(join(agentsDir, `${agentId}.json`));
+      let metadata: Record<string, unknown> | null = null;
+      if (await metadataFile.exists()) {
+        metadata = JSON.parse(await metadataFile.text());
+      }
+
+      if (!metadata) {
+        return {
+          content: [{ type: "text", text: `Error: Agent "${agentId}" not found.` }],
+          isError: true,
+        };
+      }
+
+      // Load conversation (optional — may not exist)
+      const convFile = Bun.file(join(conversationsDir, `${agentId}.json`));
+      let messages: Array<Record<string, unknown>> = [];
+      if (await convFile.exists()) {
+        const conv = JSON.parse(await convFile.text()) as Record<string, unknown>;
+        messages = (conv.messages as Array<Record<string, unknown>>) ?? [];
+      }
+
+      // Find last assistant message
+      let lastResponse = "";
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === "assistant") {
+          const content = messages[i].content;
+          if (typeof content === "string") {
+            lastResponse = content;
+          } else if (Array.isArray(content)) {
+            lastResponse = (content as Array<{ text?: string }>)
+              .filter((p) => p.text)
+              .map((p) => p.text)
+              .join("");
+          }
+          break;
+        }
+      }
+
+      // Count tool calls across all messages
+      let toolCallCount = 0;
+      for (const msg of messages) {
+        const parts = msg.parts as Array<Record<string, unknown>> | undefined;
+        if (parts) {
+          for (const part of parts) {
+            if (part.type === "tool_use" || part.type === "tool_call" || part.type === "tool-invocation") {
+              toolCallCount++;
+            }
+          }
+        }
+      }
+
+      // Truncate last response
+      const maxLen = 500;
+      const truncatedResponse =
+        lastResponse.length > maxLen
+          ? lastResponse.slice(0, maxLen) + "..."
+          : lastResponse;
+
+      const summary = {
+        agentId,
+        name: metadata.label ?? metadata.name ?? agentId,
+        status: metadata.completionReport ? "completed" : "active",
+        messageCount: messages.length,
+        toolCallCount,
+        completionReport: metadata.completionReport ?? null,
+        lastResponse: truncatedResponse || null,
+      };
+
+      // Build markdown summary
+      const lines = [
+        `## Agent: ${summary.name}`,
+        `- **Status**: ${summary.status}`,
+        `- **Messages**: ${summary.messageCount}`,
+        `- **Tool calls**: ${summary.toolCallCount}`,
+      ];
+      if (summary.completionReport) {
+        lines.push(`- **Completion report**: ${summary.completionReport}`);
+      }
+      if (summary.lastResponse) {
+        lines.push("", "**Last response** (truncated):", summary.lastResponse);
+      }
+
+      return {
+        content: [
+          { type: "text", text: lines.join("\n") },
+          { type: "text", text: JSON.stringify(summary) },
+        ],
+      };
+    },
+  );
+}
+
+function registerWakeOrCreateTaskAgent(server: McpServer, context: ToolContext): void {
+  server.tool(
+    "wake_or_create_task_agent",
+    "Wake an existing agent assigned to a task, or create a new one if none is found.",
+    {
+      taskNoteId: z.string().describe("ID of the task note"),
+      contextMessage: z
+        .string()
+        .describe("Message to send to the agent with context about what to do"),
+      model: z.string().optional().describe("Model to use for new agents"),
+    },
+    async ({ taskNoteId, contextMessage, model }) => {
+      let managerInfo;
+      try {
+        managerInfo = await getManager(context);
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+
+      const { manager } = managerInfo;
+
+      // Load task note
+      const note = await loadNote(context.workspacePath, taskNoteId);
+      if (!note) {
+        return {
+          content: [{ type: "text", text: `Error: Task note "${taskNoteId}" not found.` }],
+          isError: true,
+        };
+      }
+
+      const assignedAgents = note.taskMetadata?.assignedAgents ?? [];
+
+      // Try to find an existing agent that is still active
+      const agentsDir = join(context.workspacePath, ".workspace", "opencode", "agents");
+
+      for (let i = assignedAgents.length - 1; i >= 0; i--) {
+        const existingId = assignedAgents[i];
+        const agentFile = Bun.file(join(agentsDir, `${existingId}.json`));
+        if (!(await agentFile.exists())) continue;
+
+        const metadata = JSON.parse(await agentFile.text()) as Record<string, unknown>;
+        // If the agent has a completion report, it's done — skip it
+        if (metadata.completionReport) continue;
+
+        // Agent looks active — send the context message
+        try {
+          await manager.sendMessage(context.workspacePath, existingId, contextMessage);
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  action: "woke_existing",
+                  agentId: existingId,
+                  taskNoteId,
+                  taskTitle: note.title,
+                }),
+              },
+            ],
+          };
+        } catch {
+          // Agent not reachable — continue to next or create new
+          continue;
+        }
+      }
+
+      // No suitable existing agent — create a new one
+      const agentMetadata = await manager.createAgent(context.workspacePath, {
+        label: note.title,
+        model,
+      });
+
+      // Send context message
+      await manager.sendMessage(context.workspacePath, agentMetadata.agentId, contextMessage);
+
+      // Update task note with new assigned agent
+      if (!note.taskMetadata) {
+        note.taskMetadata = { status: "not_started" };
+      }
+      if (!note.taskMetadata.assignedAgents) {
+        note.taskMetadata.assignedAgents = [];
+      }
+      note.taskMetadata.assignedAgents.push(agentMetadata.agentId);
+      if (note.taskMetadata.status === "not_started") {
+        note.taskMetadata.status = "in_progress";
+      }
+      note.updatedAt = new Date().toISOString();
+      await saveNote(context.workspacePath, note);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              action: "created_new",
+              agentId: agentMetadata.agentId,
+              taskNoteId,
+              taskTitle: note.title,
+            }),
+          },
+        ],
+      };
+    },
+  );
+}
+
 export function registerAgentTools(server: McpServer, context: ToolContext): void {
   registerCreateAgent(server, context);
   registerListAgents(server, context);
@@ -442,4 +743,8 @@ export function registerAgentTools(server: McpServer, context: ToolContext): voi
   registerDelegateTask(server, context);
   registerSendMessageToTaskAgent(server, context);
   registerReportToParent(server, context);
+  registerSubscribeToEvents(server, context);
+  registerUnsubscribeFromEvents(server, context);
+  registerGetAgentSummary(server, context);
+  registerWakeOrCreateTaskAgent(server, context);
 }

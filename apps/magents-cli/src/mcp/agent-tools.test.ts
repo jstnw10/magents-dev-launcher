@@ -608,6 +608,262 @@ describe("agent-tools", () => {
     });
   });
 
+  describe("subscribe_to_events", () => {
+    it("creates subscription and returns ID", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir, getContext());
+
+      const result = await client.callTool({
+        name: "subscribe_to_events",
+        arguments: { eventTypes: ["agent:*", "file:*"] },
+      });
+      const parsed = parseToolResult(result) as { subscriptionId: string; eventTypes: string[] };
+
+      expect(parsed.subscriptionId).toBeDefined();
+      expect(parsed.eventTypes).toEqual(["agent:*", "file:*"]);
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("rejects empty eventTypes", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir, getContext());
+
+      const result = await client.callTool({
+        name: "subscribe_to_events",
+        arguments: { eventTypes: [] },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getToolText(result)).toContain("non-empty");
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("expands bare * to category wildcards", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir, getContext());
+
+      const result = await client.callTool({
+        name: "subscribe_to_events",
+        arguments: { eventTypes: ["*"] },
+      });
+      const parsed = parseToolResult(result) as { subscriptionId: string; eventTypes: string[] };
+
+      expect(parsed.eventTypes).toContain("agent:*");
+      expect(parsed.eventTypes).toContain("file:*");
+      expect(parsed.eventTypes).toContain("task:*");
+      expect(parsed.eventTypes.length).toBeGreaterThan(1);
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+  });
+
+  describe("unsubscribe_from_events", () => {
+    it("removes subscription", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir, getContext());
+
+      // Create a subscription first
+      const subResult = await client.callTool({
+        name: "subscribe_to_events",
+        arguments: { eventTypes: ["agent:*"] },
+      });
+      const { subscriptionId } = parseToolResult(subResult) as { subscriptionId: string };
+
+      const result = await client.callTool({
+        name: "unsubscribe_from_events",
+        arguments: { subscriptionId },
+      });
+      const parsed = parseToolResult(result) as { unsubscribed: boolean };
+
+      expect(parsed.unsubscribed).toBe(true);
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("errors on nonexistent subscription", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir, getContext());
+
+      const result = await client.callTool({
+        name: "unsubscribe_from_events",
+        arguments: { subscriptionId: "nonexistent-id" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getToolText(result)).toContain("not found");
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+  });
+
+  describe("get_agent_summary", () => {
+    it("returns formatted summary", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir, getContext());
+
+      // Create mock agent metadata
+      const agentsDir = join(tmpDir, ".workspace", "opencode", "agents");
+      await mkdir(agentsDir, { recursive: true });
+      await Bun.write(
+        join(agentsDir, "agent-1.json"),
+        JSON.stringify({
+          agentId: "agent-1",
+          label: "Test Agent",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+
+      // Create mock conversation
+      const conversationsDir = join(tmpDir, ".workspace", "opencode", "conversations");
+      await mkdir(conversationsDir, { recursive: true });
+      await Bun.write(
+        join(conversationsDir, "agent-1.json"),
+        JSON.stringify({
+          agentId: "agent-1",
+          messages: [
+            { role: "user", content: "Hello", parts: [{ type: "text", text: "Hello" }] },
+            { role: "assistant", content: "Hi there!", parts: [{ type: "text", text: "Hi there!" }] },
+          ],
+        }),
+      );
+
+      const result = await client.callTool({
+        name: "get_agent_summary",
+        arguments: { agentId: "agent-1" },
+      });
+
+      // First content block is markdown summary
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toContain("Test Agent");
+      expect(content[0].text).toContain("Messages");
+
+      // Second content block is JSON data
+      const data = JSON.parse(content[1].text) as { name: string; messageCount: number; lastResponse: string };
+      expect(data.name).toBe("Test Agent");
+      expect(data.messageCount).toBe(2);
+      expect(data.lastResponse).toBe("Hi there!");
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("handles missing agent gracefully", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir, getContext());
+
+      const result = await client.callTool({
+        name: "get_agent_summary",
+        arguments: { agentId: "nonexistent-agent" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getToolText(result)).toContain("not found");
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("handles missing conversation gracefully", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir, getContext());
+
+      // Create agent metadata but no conversation
+      const agentsDir = join(tmpDir, ".workspace", "opencode", "agents");
+      await mkdir(agentsDir, { recursive: true });
+      await Bun.write(
+        join(agentsDir, "agent-no-conv.json"),
+        JSON.stringify({
+          agentId: "agent-no-conv",
+          label: "No Conv Agent",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+
+      const result = await client.callTool({
+        name: "get_agent_summary",
+        arguments: { agentId: "agent-no-conv" },
+      });
+
+      const content = result.content as Array<{ type: string; text: string }>;
+      const data = JSON.parse(content[1].text) as { messageCount: number; lastResponse: string | null };
+      expect(data.messageCount).toBe(0);
+      expect(data.lastResponse).toBeNull();
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+  });
+
+  describe("wake_or_create_task_agent", () => {
+    it("creates new agent when no existing agents", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir, getContext());
+
+      const note = await createTestNote(tmpDir, {
+        title: "Wake Task",
+        content: "Do something",
+        taskMetadata: { status: "not_started" },
+      });
+
+      const result = await client.callTool({
+        name: "wake_or_create_task_agent",
+        arguments: { taskNoteId: note.id, contextMessage: "Start working" },
+      });
+      const parsed = parseToolResult(result) as {
+        action: string;
+        agentId: string;
+        taskNoteId: string;
+        taskTitle: string;
+      };
+
+      expect(parsed.action).toBe("created_new");
+      expect(parsed.agentId).toMatch(/^agent-mock-/);
+      expect(parsed.taskNoteId).toBe(note.id);
+      expect(parsed.taskTitle).toBe("Wake Task");
+
+      // Verify task note was updated
+      const updated = await loadNote(tmpDir, note.id);
+      expect(updated!.taskMetadata!.assignedAgents).toContain(parsed.agentId);
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("errors when task note not found", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir, getContext());
+
+      const result = await client.callTool({
+        name: "wake_or_create_task_agent",
+        arguments: { taskNoteId: "nonexistent-id", contextMessage: "Start" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getToolText(result)).toContain("not found");
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+
+    it("errors when agent manager unavailable", async () => {
+      const { client, server } = await setupClientAndServer(tmpDir, {});
+
+      const note = await createTestNote(tmpDir, {
+        title: "Task",
+        content: "Content",
+        taskMetadata: { status: "not_started" },
+      });
+
+      const result = await client.callTool({
+        name: "wake_or_create_task_agent",
+        arguments: { taskNoteId: note.id, contextMessage: "Start" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getToolText(result)).toContain("not available");
+
+      await client.close();
+      await server.mcpServer.close();
+    });
+  });
+
   describe("error handling", () => {
     it("tools error gracefully when agent manager not available", async () => {
       // No getAgentManager in context
