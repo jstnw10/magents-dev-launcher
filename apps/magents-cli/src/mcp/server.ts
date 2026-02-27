@@ -3,9 +3,11 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 
 import type { ToolContext } from "./types.js";
 import { registerAgentTools } from "./agent-tools.js";
+import { registerCommentTools } from "./comment-tools.js";
 import { registerGitTools } from "./git-tools.js";
 import { registerNoteTools } from "./note-tools.js";
 import { registerTaskTools } from "./task-tools.js";
+import { registerPrimitiveTools } from "./primitive-tools.js";
 import { registerWorkspaceTools } from "./workspace-tools.js";
 
 export type ToolRegistration = (server: McpServer, context: ToolContext) => void;
@@ -55,8 +57,10 @@ export function createMcpServer(
   server.registerTools([
     registerPingTool,
     registerAgentTools,
+    registerCommentTools,
     registerGitTools,
     registerNoteTools,
+    registerPrimitiveTools,
     registerTaskTools,
     registerWorkspaceTools,
   ]);
