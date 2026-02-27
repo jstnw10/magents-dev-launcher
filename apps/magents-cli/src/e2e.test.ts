@@ -6,8 +6,19 @@ import { join } from "node:path";
 import { OpenCodeServer } from "./opencode-server";
 import { createOpenCodeClient } from "./opencode-client";
 import { AgentManager } from "./agent-manager";
+import { detectOpencodePath } from "./opencode-resolver";
 
 const SKIP_E2E = process.env.SKIP_E2E === "1";
+
+// Auto-detect if opencode is installed (for CI environments where it's not)
+let opencodeAvailable = false;
+if (!SKIP_E2E) {
+  try {
+    opencodeAvailable = (await detectOpencodePath()) !== null;
+  } catch {
+    opencodeAvailable = false;
+  }
+}
 
 async function findFreePort(): Promise<number> {
   const server = Bun.serve({ port: 0, fetch: () => new Response() });
@@ -16,7 +27,7 @@ async function findFreePort(): Promise<number> {
   return port;
 }
 
-describe.skipIf(SKIP_E2E)("E2E: OpenCode integration", () => {
+describe.skipIf(SKIP_E2E || !opencodeAvailable)("E2E: OpenCode integration", () => {
   let workspacePath: string;
   let server: OpenCodeServer;
   let serverInfo: { pid: number; port: number; url: string };
