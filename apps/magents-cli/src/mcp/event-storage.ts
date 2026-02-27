@@ -35,7 +35,7 @@ export async function appendEvent(
 
   const full: WorkspaceEvent = {
     ...event,
-    id: crypto.randomUUID(),
+    id: Bun.randomUUIDv7(),
     timestamp: new Date().toISOString(),
   };
 

@@ -41,7 +41,7 @@ function registerAddReferencePrimitive(server: McpServer, context: ToolContext):
       const filePath = semanticId.split("#")[0];
 
       const primitive: Record<string, unknown> = {
-        id: crypto.randomUUID(),
+        id: Bun.randomUUIDv7(),
         version: 1,
         type: "reference",
         createdAt: new Date().toISOString(),
@@ -103,7 +103,7 @@ function registerAddCliPrimitive(server: McpServer, context: ToolContext): void 
       }
 
       const primitive = {
-        id: crypto.randomUUID(),
+        id: Bun.randomUUIDv7(),
         version: 1,
         type: "cli",
         createdAt: new Date().toISOString(),
@@ -149,7 +149,7 @@ function registerAddPatchPrimitive(server: McpServer, context: ToolContext): voi
       }
 
       const primitive = {
-        id: crypto.randomUUID(),
+        id: Bun.randomUUIDv7(),
         version: 1,
         type: "patch",
         createdAt: new Date().toISOString(),
@@ -198,7 +198,7 @@ function registerAddAgentActionPrimitive(server: McpServer, context: ToolContext
       }
 
       const primitive = {
-        id: crypto.randomUUID(),
+        id: Bun.randomUUIDv7(),
         version: 1,
         type: "agent_action",
         createdAt: new Date().toISOString(),

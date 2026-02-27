@@ -51,7 +51,7 @@ export async function addComment(
   const now = new Date().toISOString();
   const fullComment: Comment = {
     ...comment,
-    id: crypto.randomUUID(),
+    id: Bun.randomUUIDv7(),
     createdAt: now,
     updatedAt: now,
   };

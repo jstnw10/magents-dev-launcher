@@ -23,10 +23,6 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
-function stripAnsiCodes(text: string): string {
-  return text.replace(/\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07/g, "");
-}
-
 export function registerTerminalTools(
   server: McpServer,
   context: ToolContext,
@@ -163,7 +159,7 @@ export function registerTerminalTools(
       }
 
       const raw = await logFile.text();
-      const cleaned = stripAnsiCodes(raw);
+      const cleaned = Bun.stripANSI(raw);
       const allLines = cleaned.split("\n");
 
       const limit = Math.min(Math.max(max_lines ?? 200, 1), 10000);

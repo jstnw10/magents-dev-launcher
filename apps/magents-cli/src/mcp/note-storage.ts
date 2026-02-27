@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { mkdir, readdir, unlink } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 
 export interface TaskMetadata {
   status: string;
@@ -74,7 +74,7 @@ export async function deleteNote(
   id: string,
 ): Promise<void> {
   const filePath = join(getNotesDir(workspacePath), `${id}.json`);
-  await unlink(filePath);
+  await Bun.file(filePath).delete();
 }
 
 export async function createNote(
@@ -85,7 +85,7 @@ export async function createNote(
 ): Promise<Note> {
   const now = new Date().toISOString();
   const note: Note = {
-    id: crypto.randomUUID(),
+    id: Bun.randomUUIDv7(),
     title,
     content,
     tags: tags ?? [],

@@ -43,7 +43,7 @@ async function createTestNote(
 ): Promise<Note> {
   const now = new Date().toISOString();
   const note: Note = {
-    id: overrides.id ?? crypto.randomUUID(),
+    id: overrides.id ?? Bun.randomUUIDv7(),
     title: overrides.title ?? "Test Note",
     content:
       overrides.content ??

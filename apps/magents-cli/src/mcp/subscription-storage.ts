@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { mkdir, readdir, unlink } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 
 export interface Subscription {
   id: string;
@@ -42,7 +42,7 @@ export async function createSubscription(
   await ensureSubscriptionsDir(workspacePath);
   const full: Subscription = {
     ...sub,
-    id: crypto.randomUUID(),
+    id: Bun.randomUUIDv7(),
     createdAt: new Date().toISOString(),
   };
   const filePath = join(getSubscriptionsDir(workspacePath), `${full.id}.json`);
@@ -57,7 +57,7 @@ export async function deleteSubscription(
   const filePath = join(getSubscriptionsDir(workspacePath), `${id}.json`);
   const file = Bun.file(filePath);
   if (!(await file.exists())) return false;
-  await unlink(filePath);
+  await Bun.file(filePath).delete();
   return true;
 }
 
