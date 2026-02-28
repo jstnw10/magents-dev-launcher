@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ChatView: View {
+    @Environment(ServerManager.self) private var serverManager
     @State private var viewModel: ChatViewModel
 
     init(agentId: String, sessionId: String, workspacePath: String) {
@@ -99,12 +100,12 @@ struct ChatView: View {
                     if keyPress.modifiers.contains(.shift) {
                         return .ignored // let shift+enter insert newline
                     }
-                    Task { await viewModel.sendMessage() }
+                    Task { await viewModel.sendMessage(serverManager: serverManager) }
                     return .handled
                 }
 
             Button {
-                Task { await viewModel.sendMessage() }
+                Task { await viewModel.sendMessage(serverManager: serverManager) }
             } label: {
                 Image(systemName: "paperplane.fill")
                     .font(.title3)

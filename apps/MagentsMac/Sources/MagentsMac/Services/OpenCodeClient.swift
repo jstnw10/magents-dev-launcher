@@ -96,6 +96,7 @@ struct OpenCodeClient: Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 600 // 10 minutes — LLM responses can take a while
 
         let body: [String: Any] = [
             "parts": [["type": "text", "text": text]]

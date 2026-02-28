@@ -37,7 +37,7 @@ final class ChatViewModel {
 
     // MARK: - Send Message
 
-    func sendMessage() async {
+    func sendMessage(serverManager: ServerManager) async {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
@@ -56,7 +56,8 @@ final class ChatViewModel {
         error = nil
 
         do {
-            let client = try await makeClient()
+            let serverInfo = try await serverManager.getOrStart(workspacePath: workspacePath)
+            let client = OpenCodeClient(serverInfo: serverInfo)
             let response = try await client.sendPrompt(sessionId: sessionId, text: text)
 
             // Extract text content from response parts
@@ -80,26 +81,6 @@ final class ChatViewModel {
         }
 
         isLoading = false
-    }
-
-    // MARK: - Helpers
-
-    private func makeClient() async throws -> OpenCodeClient {
-        guard let serverInfo = try await fileManager.readServerInfo(workspacePath: workspacePath) else {
-            throw ChatViewModelError.serverNotRunning
-        }
-        return OpenCodeClient(serverInfo: serverInfo)
-    }
-}
-
-enum ChatViewModelError: Error, LocalizedError {
-    case serverNotRunning
-
-    var errorDescription: String? {
-        switch self {
-        case .serverNotRunning:
-            return "OpenCode server is not running for this workspace."
-        }
     }
 }
 
