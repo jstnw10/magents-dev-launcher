@@ -2,6 +2,7 @@ import SwiftUI
 
 // MARK: - Tab Item View
 
+@available(macOS 26.0, *)
 struct TabItemView: View {
     let tab: TabItem
     let isActive: Bool

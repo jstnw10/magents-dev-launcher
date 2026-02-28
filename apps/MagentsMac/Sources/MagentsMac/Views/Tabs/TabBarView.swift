@@ -2,6 +2,7 @@ import SwiftUI
 
 // MARK: - Tab Bar View
 
+@available(macOS 26.0, *)
 struct TabBarView: View {
     @Bindable var tabManager: TabManager
     @Namespace private var tabBarNamespace
