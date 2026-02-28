@@ -201,14 +201,14 @@ export function registerPrTools(
         return errorResult((e as Error).message);
       }
 
-      const query = `query {
-  repository(owner:"${repoInfo.owner}",name:"${repoInfo.repo}") {
-    pullRequest(number:${num}) {
-      reviewThreads(first:100) {
+      const query = `query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100) {
         nodes {
           id
           isResolved
-          comments(first:50) {
+          comments(first: 50) {
             nodes {
               id
               databaseId
@@ -225,7 +225,7 @@ export function registerPrTools(
 }`;
 
       const result = await runGh(
-        ["api", "graphql", "-f", `query=${query}`],
+        ["api", "graphql", "-f", `query=${query}`, "-f", `owner=${repoInfo.owner}`, "-f", `repo=${repoInfo.repo}`, "-F", `number=${num}`],
         cwd,
       );
 

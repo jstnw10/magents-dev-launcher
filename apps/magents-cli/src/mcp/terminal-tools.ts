@@ -5,6 +5,7 @@ import { readdir } from "node:fs/promises";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { ToolContext } from "./types.js";
+import { sanitizeId } from "./utils.js";
 
 interface TerminalSession {
   id: string;
@@ -141,7 +142,8 @@ export function registerTerminalTools(
         .describe("Maximum lines to return (default 200, max 10000)"),
     },
     async ({ terminal_id, max_lines }) => {
-      const logPath = join(terminalsDir, `${terminal_id}.log`);
+      const safeTerminalId = sanitizeId(terminal_id);
+      const logPath = join(terminalsDir, `${safeTerminalId}.log`);
       const logFile = Bun.file(logPath);
 
       if (!(await logFile.exists())) {
@@ -170,7 +172,7 @@ export function registerTerminalTools(
 
       // Read terminal metadata if available
       let terminalInfo: TerminalSession | null = null;
-      const metaPath = join(terminalsDir, `${terminal_id}.json`);
+      const metaPath = join(terminalsDir, `${safeTerminalId}.json`);
       const metaFile = Bun.file(metaPath);
       if (await metaFile.exists()) {
         try {

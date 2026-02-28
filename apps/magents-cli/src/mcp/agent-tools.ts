@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolContext } from "./types.js";
 import { loadNote, saveNote } from "./note-storage.js";
+import { sanitizeId } from "./utils.js";
 import {
   createSubscription,
   deleteSubscription,
@@ -415,7 +416,7 @@ function registerReportToParent(server: McpServer, context: ToolContext): void {
           ".workspace",
           "opencode",
           "agents",
-          `${agentId}.json`,
+          `${sanitizeId(agentId)}.json`,
         );
         const file = Bun.file(agentPath);
         if (await file.exists()) {
@@ -533,7 +534,8 @@ function registerGetAgentSummary(server: McpServer, context: ToolContext): void 
       const conversationsDir = join(context.workspacePath, ".workspace", "opencode", "conversations");
 
       // Load agent metadata
-      const metadataFile = Bun.file(join(agentsDir, `${agentId}.json`));
+      const safeAgentId = sanitizeId(agentId);
+      const metadataFile = Bun.file(join(agentsDir, `${safeAgentId}.json`));
       let metadata: Record<string, unknown> | null = null;
       if (await metadataFile.exists()) {
         metadata = JSON.parse(await metadataFile.text());
@@ -547,7 +549,7 @@ function registerGetAgentSummary(server: McpServer, context: ToolContext): void 
       }
 
       // Load conversation (optional — may not exist)
-      const convFile = Bun.file(join(conversationsDir, `${agentId}.json`));
+      const convFile = Bun.file(join(conversationsDir, `${safeAgentId}.json`));
       let messages: Array<Record<string, unknown>> = [];
       if (await convFile.exists()) {
         const conv = JSON.parse(await convFile.text()) as Record<string, unknown>;
@@ -664,7 +666,7 @@ function registerWakeOrCreateTaskAgent(server: McpServer, context: ToolContext):
       const agentsDir = join(context.workspacePath, ".workspace", "opencode", "agents");
 
       for (let i = assignedAgents.length - 1; i >= 0; i--) {
-        const existingId = assignedAgents[i];
+        const existingId = sanitizeId(assignedAgents[i]);
         const agentFile = Bun.file(join(agentsDir, `${existingId}.json`));
         if (!(await agentFile.exists())) continue;
 

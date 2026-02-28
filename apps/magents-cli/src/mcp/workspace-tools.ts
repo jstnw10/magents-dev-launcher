@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { join } from "node:path";
 import type { ToolContext } from "./types.js";
 import { runGit } from "./git-utils.js";
+import { sanitizeId } from "./utils.js";
 
 function slugify(title: string): string {
   return title
@@ -119,7 +120,7 @@ function registerSetAgentName(server: McpServer, context: ToolContext): void {
         context.workspacePath,
         ".workspace",
         "agents",
-        `${agentId}.json`,
+        `${sanitizeId(agentId)}.json`,
       );
 
       const existing = (await readJsonFile(agentPath)) ?? { agentId };
