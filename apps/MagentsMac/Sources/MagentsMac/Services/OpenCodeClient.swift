@@ -116,8 +116,33 @@ struct OpenCodeClient: Sendable {
         }
     }
 
+    /// Send a prompt without waiting for the full LLM response.
+    /// The request is fired in a detached task; use SSE events to track the response in real-time.
+    func sendPromptFireAndForget(sessionId: String, text: String) async throws {
+        let url = baseURL.appendingPathComponent("session/\(sessionId)/message")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 600 // 10 minutes
+
+        let body: [String: Any] = [
+            "parts": [["type": "text", "text": text]]
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        // Fire and forget — start the request in background.
+        // We don't await the response; SSE events will deliver the streaming content.
+        Task.detached {
+            do {
+                let (_, _) = try await URLSession.shared.data(for: request)
+            } catch {
+                print("[OpenCodeClient] Background prompt request completed/error: \(error.localizedDescription)")
+            }
+        }
+    }
+
     func getMessages(sessionId: String) async throws -> [MessageResponse] {
-        let url = baseURL.appendingPathComponent("session/\(sessionId)/messages")
+        let url = baseURL.appendingPathComponent("session/\(sessionId)/message")
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
 

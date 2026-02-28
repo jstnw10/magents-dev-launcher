@@ -81,7 +81,7 @@ struct ChatView: View {
             inputArea
         }
         .task {
-            await viewModel.loadConversation()
+            await viewModel.loadConversation(serverManager: serverManager)
         }
     }
 
