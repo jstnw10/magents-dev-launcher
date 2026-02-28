@@ -50,7 +50,7 @@ function createMockClient(
 function tmpWorkspace(): string {
   return path.join(
     tmpdir(),
-    `agent-manager-test-${crypto.randomUUID().slice(0, 8)}`,
+    `agent-manager-test-${Bun.randomUUIDv7().slice(0, 8)}`,
   );
 }
 
