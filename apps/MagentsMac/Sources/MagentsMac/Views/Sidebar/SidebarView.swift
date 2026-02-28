@@ -67,12 +67,20 @@ struct SidebarView: View {
                 .environment(viewModel)
                 .environment(tabManager)
         }
+        .sheet(isPresented: $showCreateAgentSheet) {
+            if let ws = createAgentWorkspace {
+                CreateAgentSheet(workspacePath: ws.path, workspaceId: ws.id)
+                    .environment(viewModel)
+                    .environment(tabManager)
+            }
+        }
         .alert("Destroy Workspace?", isPresented: $showDestroyConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Destroy", role: .destructive) {
                 if let ws = workspaceToDestroy {
                     Task {
-                        _ = try? await ShellRunner.run("magents workspace destroy --id \(ws.id) --force")
+                        let wfm = WorkspaceFileManager()
+                        try? await wfm.destroyWorkspace(ws)
                         await viewModel.loadWorkspaces()
                     }
                 }
@@ -146,11 +154,6 @@ struct SidebarView: View {
         .task {
             await viewModel.loadAgents(for: workspace)
         }
-        .sheet(isPresented: $showCreateAgentSheet) {
-            if let ws = createAgentWorkspace {
-                CreateAgentSheet(workspacePath: ws.path, workspaceId: ws.id)
-            }
-        }
     }
 
     // MARK: - Context Menu
@@ -159,10 +162,11 @@ struct SidebarView: View {
     private func workspaceContextMenu(_ workspace: WorkspaceConfig) -> some View {
         Button(workspace.status == .active ? "Archive" : "Unarchive") {
             Task {
+                let wfm = WorkspaceFileManager()
                 if workspace.status == .active {
-                    _ = try? await ShellRunner.run("magents workspace archive --id \(workspace.id)")
+                    try? await wfm.archiveWorkspace(at: workspace.path)
                 } else {
-                    _ = try? await ShellRunner.run("magents workspace unarchive --id \(workspace.id)")
+                    try? await wfm.unarchiveWorkspace(at: workspace.path)
                 }
                 await viewModel.loadWorkspaces()
             }

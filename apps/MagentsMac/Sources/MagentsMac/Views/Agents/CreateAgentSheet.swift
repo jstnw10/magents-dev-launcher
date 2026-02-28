@@ -12,7 +12,26 @@ struct CreateAgentSheet: View {
     @State private var viewModel = AgentCreationViewModel()
 
     var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Text("New Agent")
+                    .font(.headline)
+                Spacer()
+                Button("Create") {
+                    Task { await createAgent() }
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(viewModel.isCreating)
+            }
+            .padding()
+
+            Divider()
+
             Form {
                 specialistSection
                 detailsSection
@@ -25,24 +44,11 @@ struct CreateAgentSheet: View {
                 }
             }
             .formStyle(.grouped)
-            .navigationTitle("New Agent")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
-                        Task { await createAgent() }
-                    }
-                    .disabled(viewModel.isCreating)
-                    .buttonStyle(.borderedProminent)
-                }
-            }
-            .task {
-                await viewModel.loadSpecialists()
-            }
         }
-        .frame(minWidth: 420, minHeight: 360)
+        .frame(minWidth: 420, minHeight: 320)
+        .task {
+            await viewModel.loadSpecialists()
+        }
     }
 
     // MARK: - Sections
