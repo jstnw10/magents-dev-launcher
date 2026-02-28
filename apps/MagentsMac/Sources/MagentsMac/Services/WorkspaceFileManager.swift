@@ -57,7 +57,7 @@ struct WorkspaceFileManager: Sendable {
             }
     }
 
-    /// Lists all notes from `.workspace/notes/*.json`
+    /// Lists all notes from `.workspace/notes/*.md`
     func listNotes(workspacePath: String) async throws -> [Note] {
         let fm = FileManager.default
         let notesDir = "\(workspacePath)/.workspace/notes"
@@ -65,17 +65,17 @@ struct WorkspaceFileManager: Sendable {
 
         let files = try fm.contentsOfDirectory(atPath: notesDir)
         return files
-            .filter { $0.hasSuffix(".json") }
+            .filter { $0.hasSuffix(".md") }
             .compactMap { file -> Note? in
                 let path = "\(notesDir)/\(file)"
-                return try? decodeFile(Note.self, at: path)
+                return try? parseNoteFile(at: path)
             }
     }
 
-    /// Reads a single note by ID from `.workspace/notes/{id}.json`
+    /// Reads a single note by ID from `.workspace/notes/{id}.md`
     func readNote(workspacePath: String, id: String) async throws -> Note {
-        let path = "\(workspacePath)/.workspace/notes/\(id).json"
-        return try decodeFile(Note.self, at: path)
+        let path = "\(workspacePath)/.workspace/notes/\(id).md"
+        return try parseNoteFile(at: path)
     }
 
     /// Reads server info from `.workspace/opencode/server.json`, returns nil if not found.
@@ -268,6 +268,122 @@ struct WorkspaceFileManager: Sendable {
         // Remove workspace directory (parent of repo-name dir)
         let workspaceDir = URL(fileURLWithPath: config.path).deletingLastPathComponent().path
         try? FileManager.default.removeItem(atPath: workspaceDir)
+    }
+
+    // MARK: - Note Parsing
+
+    /// Parses a note `.md` file with YAML frontmatter.
+    private func parseNoteFile(at path: String) throws -> Note {
+        let content = try String(contentsOfFile: path, encoding: .utf8)
+
+        // Split frontmatter from body
+        guard content.hasPrefix("---\n") || content.hasPrefix("---\r\n") else {
+            throw NSError(domain: "WorkspaceFileManager", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Note file missing YAML frontmatter"])
+        }
+
+        // Find the closing ---
+        let lines = content.components(separatedBy: "\n")
+        var frontmatterEnd = -1
+        for i in 1..<lines.count {
+            if lines[i].trimmingCharacters(in: .whitespaces) == "---" {
+                frontmatterEnd = i
+                break
+            }
+        }
+
+        guard frontmatterEnd > 0 else {
+            throw NSError(domain: "WorkspaceFileManager", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Note file has unclosed YAML frontmatter"])
+        }
+
+        let frontmatterLines = lines[1..<frontmatterEnd]
+        let bodyLines = lines[(frontmatterEnd + 1)...]
+        let body = bodyLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Parse YAML frontmatter (simple key-value parsing)
+        var id = ""
+        var title = ""
+        var tags: [String] = []
+        var createdAt = ""
+        var updatedAt = ""
+        var taskStatus: String?
+        var acceptanceCriteria: [String]?
+        var inTask = false
+        var inAcceptanceCriteria = false
+
+        for line in frontmatterLines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed.hasPrefix("- ") && inAcceptanceCriteria {
+                let item = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                if acceptanceCriteria == nil { acceptanceCriteria = [] }
+                acceptanceCriteria?.append(item)
+                continue
+            }
+
+            if trimmed.hasPrefix("- ") { continue }
+
+            // Reset nested state when we hit a top-level key
+            if !line.hasPrefix(" ") && !line.hasPrefix("\t") {
+                if !trimmed.hasPrefix("status:") { inTask = false }
+                inAcceptanceCriteria = false
+            }
+
+            if trimmed.hasPrefix("id:") {
+                id = extractYAMLValue(trimmed, key: "id")
+            } else if trimmed.hasPrefix("title:") {
+                title = extractYAMLValue(trimmed, key: "title")
+            } else if trimmed.hasPrefix("tags:") {
+                let value = extractYAMLValue(trimmed, key: "tags")
+                if value.hasPrefix("[") && value.hasSuffix("]") {
+                    let inner = String(value.dropFirst().dropLast())
+                    tags = inner.components(separatedBy: ",").map {
+                        $0.trimmingCharacters(in: .whitespaces)
+                    }.filter { !$0.isEmpty }
+                }
+            } else if trimmed.hasPrefix("created:") {
+                createdAt = extractYAMLValue(trimmed, key: "created")
+            } else if trimmed.hasPrefix("updated:") {
+                updatedAt = extractYAMLValue(trimmed, key: "updated")
+            } else if trimmed == "task:" {
+                inTask = true
+            } else if inTask && trimmed.hasPrefix("status:") {
+                taskStatus = extractYAMLValue(trimmed, key: "status")
+            } else if inTask && trimmed.hasPrefix("acceptanceCriteria:") {
+                inAcceptanceCriteria = true
+            }
+        }
+
+        if updatedAt.isEmpty { updatedAt = createdAt }
+
+        var taskMetadata: TaskMetadata?
+        if let status = taskStatus {
+            taskMetadata = TaskMetadata(
+                status: status,
+                acceptanceCriteria: acceptanceCriteria
+            )
+        }
+
+        return Note(
+            id: id,
+            title: title,
+            content: body,
+            tags: tags,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            taskMetadata: taskMetadata
+        )
+    }
+
+    /// Extracts a simple YAML value, stripping quotes.
+    private func extractYAMLValue(_ line: String, key: String) -> String {
+        let value = String(line.dropFirst(key.count + 1)).trimmingCharacters(in: .whitespaces)
+        if (value.hasPrefix("\"") && value.hasSuffix("\"")) ||
+           (value.hasPrefix("'") && value.hasSuffix("'")) {
+            return String(value.dropFirst().dropLast())
+        }
+        return value
     }
 
     // MARK: - Helpers
