@@ -8,6 +8,7 @@ struct CreateAgentSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(WorkspaceViewModel.self) private var workspaceVM
     @Environment(TabManager.self) private var tabManager
+    @Environment(ServerManager.self) private var serverManager
 
     @State private var viewModel = AgentCreationViewModel()
 
@@ -32,59 +33,53 @@ struct CreateAgentSheet: View {
 
             Divider()
 
-            Form {
-                specialistSection
-                detailsSection
+            // Content — use ScrollView + GroupBox instead of Form to avoid
+            // macOS layout collapse when Form is inside a VStack
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    GroupBox("Specialist") {
+                        Picker("Type", selection: $viewModel.selectedSpecialist) {
+                            Text("None (Custom)")
+                                .tag(nil as SpecialistDefinition?)
 
-                if let error = viewModel.error {
-                    Section {
+                            ForEach(viewModel.specialists) { specialist in
+                                Text(specialist.name)
+                                    .tag(specialist as SpecialistDefinition?)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    GroupBox("Details") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            LabeledContent("Label") {
+                                TextField("Agent name", text: $viewModel.label)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+
+                            Picker("Model", selection: $viewModel.model) {
+                                Text("Default").tag("")
+                                Text("claude-sonnet-4").tag("claude-sonnet-4-20250514")
+                                Text("claude-opus-4").tag("claude-opus-4-20250514")
+                                Text("claude-haiku-4").tag("claude-haiku-4-20250514")
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if let error = viewModel.error {
                         Label(error, systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.red)
+                            .padding(.horizontal)
                     }
                 }
+                .padding()
             }
-            .formStyle(.grouped)
         }
-        .frame(minWidth: 420, minHeight: 320)
+        .frame(width: 450, height: 350)
         .task {
             await viewModel.loadSpecialists()
-        }
-    }
-
-    // MARK: - Sections
-
-    @ViewBuilder
-    private var specialistSection: some View {
-        Section("Specialist") {
-            Picker("Type", selection: $viewModel.selectedSpecialist) {
-                Text("None (Custom)")
-                    .tag(nil as SpecialistDefinition?)
-
-                ForEach(viewModel.specialists) { specialist in
-                    VStack(alignment: .leading) {
-                        Text(specialist.name)
-                        Text(specialist.description)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .tag(specialist as SpecialistDefinition?)
-                }
-            }
-            .pickerStyle(.menu)
-        }
-    }
-
-    @ViewBuilder
-    private var detailsSection: some View {
-        Section("Details") {
-            TextField("Label", text: $viewModel.label, prompt: Text("Agent name"))
-
-            Picker("Model", selection: $viewModel.model) {
-                Text("Default").tag("")
-                Text("claude-sonnet-4").tag("claude-sonnet-4-20250514")
-                Text("claude-opus-4").tag("claude-opus-4-20250514")
-                Text("claude-haiku-4").tag("claude-haiku-4-20250514")
-            }
         }
     }
 
@@ -92,7 +87,7 @@ struct CreateAgentSheet: View {
 
     private func createAgent() async {
         do {
-            let agent = try await viewModel.createAgent(workspacePath: workspacePath)
+            let agent = try await viewModel.createAgent(workspacePath: workspacePath, serverManager: serverManager)
 
             // Refresh agents list
             workspaceVM.agentsForWorkspace[workspaceId] = nil

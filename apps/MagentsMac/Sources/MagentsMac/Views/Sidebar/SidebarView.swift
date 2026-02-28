@@ -7,7 +7,6 @@ struct SidebarView: View {
     @State private var showCreateSheet = false
     @State private var showDestroyConfirmation = false
     @State private var workspaceToDestroy: WorkspaceConfig?
-    @State private var showCreateAgentSheet = false
     @State private var createAgentWorkspace: WorkspaceConfig?
 
     var body: some View {
@@ -69,13 +68,11 @@ struct SidebarView: View {
                 .environment(tabManager)
                 .environment(serverManager)
         }
-        .sheet(isPresented: $showCreateAgentSheet) {
-            if let ws = createAgentWorkspace {
-                CreateAgentSheet(workspacePath: ws.path, workspaceId: ws.id)
-                    .environment(viewModel)
-                    .environment(tabManager)
-                    .environment(serverManager)
-            }
+        .sheet(item: $createAgentWorkspace) { ws in
+            CreateAgentSheet(workspacePath: ws.path, workspaceId: ws.id)
+                .environment(viewModel)
+                .environment(tabManager)
+                .environment(serverManager)
         }
         .alert("Destroy Workspace?", isPresented: $showDestroyConfirmation) {
             Button("Cancel", role: .cancel) { }
@@ -127,7 +124,6 @@ struct SidebarView: View {
 
             Button {
                 createAgentWorkspace = workspace
-                showCreateAgentSheet = true
             } label: {
                 Label("New Agent", systemImage: "plus.circle")
                     .font(.caption)
