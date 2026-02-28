@@ -23,7 +23,20 @@ struct ChatView: View {
                                 .id(message.id)
                         }
 
-                        if viewModel.isLoading {
+                        // Show streaming response in real-time
+                        if !viewModel.streamingText.isEmpty {
+                            MessageBubbleView(message: ConversationMessage(
+                                role: .assistant,
+                                content: viewModel.streamingText,
+                                parts: [],
+                                timestamp: ISO8601DateFormatter().string(from: Date()),
+                                tokens: nil,
+                                cost: nil
+                            ))
+                            .id("streaming-message")
+                        }
+
+                        if viewModel.isLoading && viewModel.streamingText.isEmpty {
                             StreamingIndicator()
                                 .id("loading-indicator")
                         }
@@ -34,6 +47,9 @@ struct ChatView: View {
                     scrollToBottom(proxy: proxy)
                 }
                 .onChange(of: viewModel.isLoading) {
+                    scrollToBottom(proxy: proxy)
+                }
+                .onChange(of: viewModel.streamingText) {
                     scrollToBottom(proxy: proxy)
                 }
             }
@@ -121,7 +137,9 @@ struct ChatView: View {
 
     private func scrollToBottom(proxy: ScrollViewProxy) {
         withAnimation(.easeOut(duration: 0.2)) {
-            if viewModel.isLoading {
+            if !viewModel.streamingText.isEmpty {
+                proxy.scrollTo("streaming-message", anchor: .bottom)
+            } else if viewModel.isLoading {
                 proxy.scrollTo("loading-indicator", anchor: .bottom)
             } else if let lastId = viewModel.messages.last?.id {
                 proxy.scrollTo(lastId, anchor: .bottom)
