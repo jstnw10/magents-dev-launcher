@@ -3,18 +3,45 @@ import Foundation
 /// Response types for OpenCode API
 struct CreateSessionResponse: Codable, Sendable {
     let id: String
-    let slug: String
-    let title: String
+    let slug: String?
+    let title: String?
+}
+
+struct PromptResponseInfo: Codable, Sendable {
+    let id: String
+    let role: String
+    let tokens: PromptTokens?
+    let cost: Double?
+}
+
+struct PromptTokens: Codable, Sendable {
+    let input: Int
+    let output: Int
+}
+
+struct PromptPart: Codable, Sendable {
+    let type: String
+    let text: String?
 }
 
 struct PromptResponse: Codable, Sendable {
-    let content: String
+    let info: PromptResponseInfo?
+    let parts: [PromptPart]?
+}
+
+struct MessageInfo: Codable, Sendable {
+    let id: String
+    let role: String
+    let time: MessageTime?
+}
+
+struct MessageTime: Codable, Sendable {
+    let created: Double?
 }
 
 struct MessageResponse: Codable, Sendable {
-    let role: String
-    let content: String
-    let timestamp: String?
+    let info: MessageInfo
+    let parts: [PromptPart]
 }
 
 /// HTTP client for communicating with the OpenCode server.
@@ -32,7 +59,7 @@ struct OpenCodeClient: Sendable {
     // MARK: - Session Management
 
     func createSession(directory: String, title: String) async throws -> CreateSessionResponse {
-        let url = baseURL.appendingPathComponent("/session/create")
+        let url = baseURL.appendingPathComponent("session")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -41,52 +68,80 @@ struct OpenCodeClient: Sendable {
         request.httpBody = try JSONEncoder().encode(body)
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        try validateResponse(response)
-        return try JSONDecoder().decode(CreateSessionResponse.self, from: data)
+        try validateResponse(response, data: data)
+
+        do {
+            return try JSONDecoder().decode(CreateSessionResponse.self, from: data)
+        } catch {
+            let bodyStr = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+            print("[OpenCodeClient] Failed to decode CreateSessionResponse: \(error)")
+            print("[OpenCodeClient] Response body: \(bodyStr)")
+            throw error
+        }
     }
 
     func deleteSession(id: String) async throws {
-        let url = baseURL.appendingPathComponent("/session/\(id)")
+        let url = baseURL.appendingPathComponent("session/\(id)")
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
 
-        let (_, response) = try await URLSession.shared.data(for: request)
-        try validateResponse(response)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateResponse(response, data: data)
     }
 
     // MARK: - Messaging
 
     func sendPrompt(sessionId: String, text: String) async throws -> PromptResponse {
-        let url = baseURL.appendingPathComponent("/session/\(sessionId)/prompt")
+        let url = baseURL.appendingPathComponent("session/\(sessionId)/message")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let body: [String: String] = ["text": text]
-        request.httpBody = try JSONEncoder().encode(body)
+        let body: [String: Any] = [
+            "parts": [["type": "text", "text": text]]
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        try validateResponse(response)
-        return try JSONDecoder().decode(PromptResponse.self, from: data)
+        try validateResponse(response, data: data)
+
+        do {
+            return try JSONDecoder().decode(PromptResponse.self, from: data)
+        } catch {
+            let bodyStr = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+            print("[OpenCodeClient] Failed to decode PromptResponse: \(error)")
+            print("[OpenCodeClient] Response body: \(bodyStr)")
+            throw error
+        }
     }
 
     func getMessages(sessionId: String) async throws -> [MessageResponse] {
-        let url = baseURL.appendingPathComponent("/session/\(sessionId)/messages")
+        let url = baseURL.appendingPathComponent("session/\(sessionId)/messages")
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        try validateResponse(response)
-        return try JSONDecoder().decode([MessageResponse].self, from: data)
+        try validateResponse(response, data: data)
+
+        do {
+            return try JSONDecoder().decode([MessageResponse].self, from: data)
+        } catch {
+            let bodyStr = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+            print("[OpenCodeClient] Failed to decode [MessageResponse]: \(error)")
+            print("[OpenCodeClient] Response body: \(bodyStr)")
+            throw error
+        }
     }
 
     // MARK: - Helpers
 
-    private func validateResponse(_ response: URLResponse) throws {
+    private func validateResponse(_ response: URLResponse, data: Data? = nil) throws {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw OpenCodeClientError.invalidResponse
         }
         guard (200...299).contains(httpResponse.statusCode) else {
+            let body = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            print("[OpenCodeClient] HTTP \(httpResponse.statusCode): \(body)")
             throw OpenCodeClientError.httpError(statusCode: httpResponse.statusCode)
         }
     }

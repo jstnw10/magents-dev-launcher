@@ -59,13 +59,20 @@ final class ChatViewModel {
             let client = try await makeClient()
             let response = try await client.sendPrompt(sessionId: sessionId, text: text)
 
+            // Extract text content from response parts
+            let responseText = response.parts?
+                .compactMap { $0.text }
+                .joined(separator: "\n") ?? ""
+
             let assistantMessage = ConversationMessage(
                 role: .assistant,
-                content: response.content,
+                content: responseText,
                 parts: [],
                 timestamp: ISO8601DateFormatter().string(from: Date()),
-                tokens: nil,
-                cost: nil
+                tokens: response.info.flatMap { info in
+                    info.tokens.map { MessageTokens(input: $0.input, output: $0.output) }
+                },
+                cost: response.info?.cost
             )
             messages.append(assistantMessage)
         } catch {
