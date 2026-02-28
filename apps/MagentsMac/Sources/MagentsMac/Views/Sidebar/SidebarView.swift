@@ -3,6 +3,7 @@ import SwiftUI
 struct SidebarView: View {
     @Environment(WorkspaceViewModel.self) private var viewModel
     @Environment(TabManager.self) private var tabManager
+    @Environment(ServerManager.self) private var serverManager
     @State private var showCreateSheet = false
     @State private var showDestroyConfirmation = false
     @State private var workspaceToDestroy: WorkspaceConfig?
@@ -66,12 +67,14 @@ struct SidebarView: View {
             CreateWorkspaceSheet()
                 .environment(viewModel)
                 .environment(tabManager)
+                .environment(serverManager)
         }
         .sheet(isPresented: $showCreateAgentSheet) {
             if let ws = createAgentWorkspace {
                 CreateAgentSheet(workspacePath: ws.path, workspaceId: ws.id)
                     .environment(viewModel)
                     .environment(tabManager)
+                    .environment(serverManager)
             }
         }
         .alert("Destroy Workspace?", isPresented: $showDestroyConfirmation) {
