@@ -15,7 +15,7 @@ struct WorkspaceHeaderView: View {
             HStack(spacing: 4) {
                 Image(systemName: "arrow.triangle.branch")
                     .font(.caption2)
-                Text(workspace.branch)
+                Text(workspace.branch ?? "—")
                     .font(.caption)
             }
             .padding(.horizontal, 8)

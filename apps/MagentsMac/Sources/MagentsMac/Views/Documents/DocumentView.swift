@@ -38,10 +38,8 @@ struct DocumentView: View {
 
             // Content
             if viewModel.isLoading {
-                Spacer()
-                ProgressView("Loading…")
+                DocumentScanAnimation()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                Spacer()
             } else if let error = viewModel.error {
                 Spacer()
                 VStack(spacing: 8) {

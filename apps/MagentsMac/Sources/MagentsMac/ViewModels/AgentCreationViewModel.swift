@@ -26,16 +26,14 @@ final class AgentCreationViewModel {
     // MARK: - Create
 
     /// Creates an agent, writes metadata to disk, and returns the metadata.
-    func createAgent(workspacePath: String) async throws -> AgentMetadata {
+    /// Uses ServerManager to ensure the OpenCode server is running.
+    func createAgent(workspacePath: String, serverManager: ServerManager) async throws -> AgentMetadata {
         isCreating = true
         error = nil
         defer { isCreating = false }
 
-        // 1. Read server info
-        let fileManager = WorkspaceFileManager()
-        guard let serverInfo = try await fileManager.readServerInfo(workspacePath: workspacePath) else {
-            throw AgentCreationError.serverNotRunning
-        }
+        // 1. Get or start server via ServerManager
+        let serverInfo = try await serverManager.getOrStart(workspacePath: workspacePath)
 
         // 2. Create OpenCode session
         let client = OpenCodeClient(serverInfo: serverInfo)

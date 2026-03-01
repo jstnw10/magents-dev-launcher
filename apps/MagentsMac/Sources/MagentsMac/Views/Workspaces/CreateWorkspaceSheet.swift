@@ -85,27 +85,19 @@ final class CreateWorkspaceViewModel {
         errorMessage = nil
         defer { isCreating = false }
 
-        var cmd = "magents workspace create --repo \(shellEscape(repositoryPath))"
-        if !title.isEmpty {
-            cmd += " --title \(shellEscape(title))"
-        }
-        cmd += " --base-ref \(shellEscape(baseBranch))"
-
         do {
-            let result = try await ShellRunner.run(cmd)
-            if result.exitCode != 0 {
-                errorMessage = "Creation failed: \(result.output)"
-                return false
-            }
+            let wfm = WorkspaceFileManager()
+            _ = try await wfm.createWorkspace(
+                repositoryPath: repositoryPath,
+                title: title.isEmpty ? nil : title,
+                baseRef: baseBranch,
+                setupCommand: setupCommand.isEmpty ? nil : setupCommand
+            )
             return true
         } catch {
-            errorMessage = "Error: \(error.localizedDescription)"
+            errorMessage = "Creation failed: \(error.localizedDescription)"
             return false
         }
-    }
-
-    private func shellEscape(_ str: String) -> String {
-        "'\(str.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }
 

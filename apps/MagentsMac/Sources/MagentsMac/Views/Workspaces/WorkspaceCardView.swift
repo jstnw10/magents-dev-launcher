@@ -21,7 +21,7 @@ struct WorkspaceCardView: View {
 
                 Spacer()
 
-                Text(workspace.branch)
+                Text(workspace.branch ?? "—")
                     .font(.caption)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)

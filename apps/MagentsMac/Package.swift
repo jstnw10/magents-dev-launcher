@@ -12,8 +12,17 @@ let package = Package(
         .executableTarget(
             name: "MagentsMac",
             path: "Sources/MagentsMac",
+            exclude: ["Info.plist"],
             swiftSettings: [
                 .swiftLanguageMode(.v6)
+            ],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Sources/MagentsMac/Info.plist"
+                ])
             ]
         )
     ]

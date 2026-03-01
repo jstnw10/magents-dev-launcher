@@ -16,6 +16,7 @@ final class ChatViewModel {
 
     private let fileManager = WorkspaceFileManager()
     private var sseClient: SSEClient?
+    private var streamingTask: Task<Void, Never>?
 
     init(agentId: String, sessionId: String, workspacePath: String) {
         self.agentId = agentId
@@ -23,15 +24,36 @@ final class ChatViewModel {
         self.workspacePath = workspacePath
     }
 
-    // MARK: - Load Conversation from Disk
+    // MARK: - Load Conversation from Server
 
-    func loadConversation() async {
-        let path = "\(workspacePath)/.workspace/opencode/conversations/\(agentId).json"
+    func loadConversation(serverManager: ServerManager) async {
         do {
-            let data = try Data(contentsOf: URL(fileURLWithPath: path))
-            let conversation = try JSONDecoder().decode(Conversation.self, from: data)
-            messages = conversation.messages
+            let serverInfo = try await serverManager.getOrStart(workspacePath: workspacePath)
+            let client = OpenCodeClient(serverInfo: serverInfo)
+            let serverMessages = try await client.getMessages(sessionId: sessionId)
+
+            // Convert server messages to ConversationMessage
+            messages = serverMessages.compactMap { msg -> ConversationMessage? in
+                let role: MessageRole = msg.info.role == "user" ? .user : .assistant
+                let textParts = msg.parts.compactMap { $0.text }
+                let content = textParts.joined(separator: "\n")
+
+                // Skip empty messages
+                guard !content.isEmpty else { return nil }
+
+                return ConversationMessage(
+                    role: role,
+                    content: content,
+                    parts: [],
+                    timestamp: msg.info.time?.created.map {
+                        ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: $0 / 1000))
+                    } ?? ISO8601DateFormatter().string(from: Date()),
+                    tokens: nil,
+                    cost: nil
+                )
+            }
         } catch {
+            print("[ChatVM] Failed to load conversation from server: \(error)")
             messages = []
         }
     }
@@ -68,61 +90,97 @@ final class ChatViewModel {
             // 2. Send prompt (fire and forget — response comes via SSE)
             try await client.sendPromptFireAndForget(sessionId: sessionId, text: text)
 
-            // 3. Listen for SSE events and accumulate streaming text
-            var receivedResponse = false
-            for await event in eventStream {
-                guard let jsonData = event.data.data(using: .utf8) else { continue }
+            // 3. Listen for SSE events in a STORED task — not subject to SwiftUI Task cancellation.
+            //    The SwiftUI `Task { await viewModel.sendMessage(...) }` can be cancelled when the
+            //    view re-renders (e.g. when isLoading or streamingText changes). By running the SSE
+            //    loop in a separate stored Task, we prevent premature cancellation.
+            let sid = sessionId
+            streamingTask = Task { [weak self] in
+                var receivedResponse = false
+                for await event in eventStream {
+                    guard let self = self else { break }
+                    guard !Task.isCancelled else { break }
 
-                guard let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
-                    continue
-                }
+                    guard let jsonData = event.data.data(using: .utf8) else { continue }
+                    guard let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else { continue }
 
-                // Filter events for our session
-                let eventSessionId = json["sessionID"] as? String ?? json["session_id"] as? String
-                if let sid = eventSessionId, sid != sessionId { continue }
+                    let eventType = json["type"] as? String ?? ""
+                    let properties = json["properties"] as? [String: Any] ?? [:]
 
-                let eventType = event.event ?? json["type"] as? String ?? ""
+                    // Filter events for our session
+                    let eventSessionId = properties["sessionID"] as? String
+                        ?? (properties["info"] as? [String: Any])?["sessionID"] as? String
+                        ?? (properties["part"] as? [String: Any])?["sessionID"] as? String
+                    if let eventSid = eventSessionId, eventSid != sid { continue }
 
-                if eventType.contains("text") && eventType.contains("delta") {
-                    if let deltaText = json["text"] as? String {
-                        streamingText += deltaText
-                    } else if let props = json["properties"] as? [String: Any],
-                              let deltaText = props["text"] as? String {
-                        streamingText += deltaText
+                    await MainActor.run {
+                        switch eventType {
+                        case "message.part.delta":
+                            if let delta = properties["delta"] as? String {
+                                self.streamingText += delta
+                            }
+
+                        case "message.part.updated":
+                            if let part = properties["part"] as? [String: Any],
+                               part["type"] as? String == "text",
+                               let text = part["text"] as? String,
+                               !text.isEmpty {
+                                if text.count > self.streamingText.count {
+                                    self.streamingText = text
+                                }
+                            }
+
+                        case "session.idle":
+                            receivedResponse = true
+
+                        case "message.updated":
+                            if let info = properties["info"] as? [String: Any],
+                               info["role"] as? String == "assistant",
+                               let time = info["time"] as? [String: Any],
+                               time["completed"] != nil {
+                                receivedResponse = true
+                            }
+
+                        case "server.heartbeat", "server.connected", "file.watcher.updated",
+                             "session.updated", "session.diff", "session.status",
+                             "todo.updated":
+                            break
+
+                        default:
+                            print("[ChatVM] SSE event: \(eventType)")
+                        }
                     }
-                } else if (eventType.contains("text") && eventType.contains("end"))
-                    || (eventType.contains("message") && eventType.contains("complete"))
-                    || eventType.contains("finish") || eventType.contains("done") {
-                    receivedResponse = true
-                } else {
-                    print("[ChatVM] SSE event: \(eventType) — \(event.data.prefix(200))")
+
+                    if receivedResponse { break }
                 }
 
-                if receivedResponse { break }
+                // Finalize on main actor
+                await MainActor.run { [weak self] in
+                    guard let self = self else { return }
+                    let finalText = self.streamingText.isEmpty ? "(No response received)" : self.streamingText
+                    let assistantMessage = ConversationMessage(
+                        role: .assistant,
+                        content: finalText,
+                        parts: [],
+                        timestamp: ISO8601DateFormatter().string(from: Date()),
+                        tokens: nil,
+                        cost: nil
+                    )
+                    self.messages.append(assistantMessage)
+                    self.streamingText = ""
+                    self.sseClient?.disconnect()
+                    self.sseClient = nil
+                    self.isLoading = false
+                }
             }
 
-            // 4. Finalize — create assistant message from streamed text
-            let finalText = streamingText.isEmpty ? "(No response received)" : streamingText
-            let assistantMessage = ConversationMessage(
-                role: .assistant,
-                content: finalText,
-                parts: [],
-                timestamp: ISO8601DateFormatter().string(from: Date()),
-                tokens: nil,
-                cost: nil
-            )
-            messages.append(assistantMessage)
-            streamingText = ""
-            sseClient.disconnect()
-            self.sseClient = nil
+            // NOTE: sendMessage returns here immediately after launching the streaming task.
+            // isLoading = false is set inside the streamingTask when it completes.
 
         } catch {
-            // Fallback: if SSE fails, try the synchronous prompt
+            // Fallback: if SSE setup fails, try the synchronous prompt
             await sendMessageFallback(serverManager: serverManager, text: text)
-            return
         }
-
-        isLoading = false
     }
 
     // MARK: - Fallback (synchronous prompt)
@@ -163,6 +221,8 @@ final class ChatViewModel {
     // MARK: - Cancel Streaming
 
     func cancelStreaming() {
+        streamingTask?.cancel()
+        streamingTask = nil
         sseClient?.disconnect()
         sseClient = nil
         if !streamingText.isEmpty {

@@ -9,26 +9,27 @@ struct WorkspaceFileManager: Sendable {
         return "\(home)/.magents/workspaces"
     }
 
-    /// Lists all workspaces by scanning `~/.magents/workspaces/{id}/{repo}/.workspace/workspace.json`
+    /// Lists all workspaces by scanning `~/.magents/workspaces/{id}/{repo}/.workspace/workspace.json`.
     func listWorkspaces() async throws -> [WorkspaceConfig] {
         let fm = FileManager.default
-        let root = getWorkspacesRoot()
-        guard fm.fileExists(atPath: root) else { return [] }
-
         var workspaces: [WorkspaceConfig] = []
-        let workspaceIds = try fm.contentsOfDirectory(atPath: root)
 
-        for workspaceId in workspaceIds {
-            let workspaceDir = "\(root)/\(workspaceId)"
-            guard isDirectory(workspaceDir, fm: fm) else { continue }
+        // 1. Scan ~/.magents/workspaces/{id}/{repo}/.workspace/workspace.json
+        let magentsRoot = getWorkspacesRoot()
+        if fm.fileExists(atPath: magentsRoot) {
+            let workspaceIds = try fm.contentsOfDirectory(atPath: magentsRoot)
+            for workspaceId in workspaceIds {
+                let workspaceDir = "\(magentsRoot)/\(workspaceId)"
+                guard isDirectory(workspaceDir, fm: fm) else { continue }
 
-            let repos = try fm.contentsOfDirectory(atPath: workspaceDir)
-            for repo in repos {
-                let repoDir = "\(workspaceDir)/\(repo)"
-                let configPath = "\(repoDir)/.workspace/workspace.json"
-                if fm.fileExists(atPath: configPath) {
-                    if let config = try? decodeFile(WorkspaceConfig.self, at: configPath) {
-                        workspaces.append(config)
+                let repos = try fm.contentsOfDirectory(atPath: workspaceDir)
+                for repo in repos {
+                    let repoDir = "\(workspaceDir)/\(repo)"
+                    let configPath = "\(repoDir)/.workspace/workspace.json"
+                    if fm.fileExists(atPath: configPath) {
+                        if let config = try? decodeFile(WorkspaceConfig.self, at: configPath) {
+                            workspaces.append(config)
+                        }
                     }
                 }
             }
@@ -169,6 +170,26 @@ struct WorkspaceFileManager: Sendable {
         let wsDir = "\(workspacePath)/.workspace"
         try FileManager.default.createDirectory(atPath: "\(wsDir)/logs", withIntermediateDirectories: true)
 
+        // Create notes directory and default spec
+        let notesDir = "\(wsDir)/notes"
+        try FileManager.default.createDirectory(atPath: notesDir, withIntermediateDirectories: true)
+
+        // Create default spec.md with YAML frontmatter
+        let specContent = """
+        ---
+        id: spec
+        title: Spec
+        tags: [spec]
+        pinned: true
+        created: "\(ISO8601DateFormatter().string(from: Date()))"
+        ---
+
+        ## Goal
+
+        _Describe the goal of this workspace._
+        """
+        try specContent.write(toFile: "\(notesDir)/spec.md", atomically: true, encoding: .utf8)
+
         // 6. Parse repo owner/name from git remote
         var repoOwner: String?
         var repoNameFromRemote: String?
@@ -260,11 +281,13 @@ struct WorkspaceFileManager: Sendable {
 
     /// Destroy a workspace: remove the git worktree and delete the workspace directory.
     func destroyWorkspace(_ config: WorkspaceConfig) async throws {
-        // Remove git worktree
-        _ = try? await ShellRunner.run(
-            "git worktree remove '\(config.worktreePath)' --force",
-            workingDirectory: config.repositoryPath
-        )
+        // Remove git worktree if paths are available
+        if let worktreePath = config.worktreePath, let repositoryPath = config.repositoryPath {
+            _ = try? await ShellRunner.run(
+                "git worktree remove '\(worktreePath)' --force",
+                workingDirectory: repositoryPath
+            )
+        }
         // Remove workspace directory (parent of repo-name dir)
         let workspaceDir = URL(fileURLWithPath: config.path).deletingLastPathComponent().path
         try? FileManager.default.removeItem(atPath: workspaceDir)

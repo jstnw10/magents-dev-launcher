@@ -1,15 +1,23 @@
+import AppKit
 import SwiftUI
 
 @main
 struct MagentsApp: App {
     @State private var viewModel = WorkspaceViewModel()
     @State private var tabManager = TabManager()
+    @State private var serverManager = ServerManager()
+
+    init() {
+        NSApplication.shared.setActivationPolicy(.regular)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(viewModel)
                 .environment(tabManager)
+                .environment(serverManager)
         }
         .windowStyle(.automatic)
         .commands {

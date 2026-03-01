@@ -18,7 +18,7 @@ final class SSEClient: NSObject, @unchecked Sendable, URLSessionDataDelegate {
     private let continuationLock = OSAllocatedUnfairLock<AsyncStream<SSEEvent>.Continuation?>(initialState: nil)
 
     init(baseURL: URL) {
-        self.url = baseURL.appendingPathComponent("sse")
+        self.url = baseURL.appendingPathComponent("event")
         super.init()
     }
 

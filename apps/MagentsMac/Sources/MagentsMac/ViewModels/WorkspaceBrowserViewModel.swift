@@ -23,7 +23,7 @@ final class WorkspaceBrowserViewModel {
             let query = searchText.lowercased()
             result = result.filter { workspace in
                 workspace.title.lowercased().contains(query)
-                    || workspace.branch.lowercased().contains(query)
+                    || (workspace.branch?.lowercased().contains(query) ?? false)
                     || (workspace.repositoryName?.lowercased().contains(query) ?? false)
             }
         }

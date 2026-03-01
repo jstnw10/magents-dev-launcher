@@ -26,10 +26,19 @@ struct ServerStatusView: View {
             Label("Port \(info.port)", systemImage: "circle.fill")
                 .font(.caption)
                 .foregroundStyle(.green)
+        case .starting:
+            Label("Starting…", systemImage: "circle.dashed")
+                .font(.caption)
+                .foregroundStyle(.orange)
         case .stopped:
             Label("Stopped", systemImage: "circle.fill")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        case .error(let msg):
+            Label(msg, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+                .lineLimit(1)
         case .unknown:
             Label("Checking…", systemImage: "circle.dashed")
                 .font(.caption)
@@ -48,7 +57,7 @@ struct ServerStatusView: View {
             }
             .controlSize(.small)
             .buttonStyle(.bordered)
-        case .stopped:
+        case .stopped, .error:
             Button("Start") {
                 Task {
                     try? await serverManager.startServer(workspacePath: workspacePath)
@@ -56,6 +65,9 @@ struct ServerStatusView: View {
             }
             .controlSize(.small)
             .buttonStyle(.bordered)
+        case .starting:
+            ProgressView()
+                .controlSize(.small)
         case .unknown:
             ProgressView()
                 .controlSize(.small)

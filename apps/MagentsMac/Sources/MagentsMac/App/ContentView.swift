@@ -1,8 +1,10 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
     @Environment(WorkspaceViewModel.self) private var viewModel
     @Environment(TabManager.self) private var tabManager
+    @Environment(ServerManager.self) private var serverManager
 
     var body: some View {
         NavigationSplitView {
@@ -33,6 +35,17 @@ struct ContentView: View {
         }
         .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 280)
         .navigationTitle(windowTitle)
+        .onChange(of: viewModel.selectedWorkspaceId) { _, newId in
+            if let newId,
+               let workspace = viewModel.workspaces.first(where: { $0.id == newId }) {
+                Task {
+                    try? await serverManager.getOrStart(workspacePath: workspace.path)
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            serverManager.stopAll()
+        }
     }
 
     // MARK: - Window Title

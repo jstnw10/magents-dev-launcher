@@ -14,7 +14,7 @@ struct WorkspaceRow: View {
                     .font(.body)
                     .lineLimit(1)
 
-                Text(workspace.branch)
+                Text(workspace.branch ?? "—")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
