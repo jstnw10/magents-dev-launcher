@@ -4,11 +4,12 @@ struct ChatView: View {
     @Environment(ServerManager.self) private var serverManager
     @State private var viewModel: ChatViewModel
 
-    init(agentId: String, sessionId: String, workspacePath: String) {
+    init(agentId: String, sessionId: String, workspacePath: String, workspaceViewModel: WorkspaceViewModel) {
         _viewModel = State(initialValue: ChatViewModel(
             agentId: agentId,
             sessionId: sessionId,
-            workspacePath: workspacePath
+            workspacePath: workspacePath,
+            workspaceViewModel: workspaceViewModel
         ))
     }
 
@@ -86,10 +87,10 @@ struct ChatView: View {
         }
         .task {
             await viewModel.loadConversation(serverManager: serverManager)
-            await viewModel.connectSSE(serverManager: serverManager)
+            viewModel.registerForEvents()
         }
         .onDisappear {
-            viewModel.disconnectSSE()
+            viewModel.unregisterForEvents()
         }
     }
 
