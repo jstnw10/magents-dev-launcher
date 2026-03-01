@@ -40,11 +40,11 @@ struct CreateAgentSheet: View {
                     GroupBox("Specialist") {
                         Picker("Type", selection: $viewModel.selectedSpecialist) {
                             Text("None (Custom)")
-                                .tag(nil as SpecialistDefinition?)
+                                .tag(nil as SpecialistSummary?)
 
                             ForEach(viewModel.specialists) { specialist in
                                 Text(specialist.name)
-                                    .tag(specialist as SpecialistDefinition?)
+                                    .tag(specialist as SpecialistSummary?)
                             }
                         }
                         .pickerStyle(.menu)
@@ -79,7 +79,7 @@ struct CreateAgentSheet: View {
         }
         .frame(width: 450, height: 350)
         .task {
-            await viewModel.loadSpecialists()
+            await viewModel.loadSpecialists(serverManager: serverManager, workspacePath: workspacePath)
         }
     }
 

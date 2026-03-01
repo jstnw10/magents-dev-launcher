@@ -9,7 +9,7 @@ final class ChatViewModel {
     var isLoading: Bool = false
     var error: String?
 
-    /// Streaming parts indexed by part ID, built up during SSE streaming.
+    /// Streaming parts indexed by part ID, built up during WebSocket streaming.
     var streamingParts: [String: MessagePart] = [:]
     /// Ordered part IDs to maintain insertion order during streaming.
     var streamingPartOrder: [String] = []
@@ -31,124 +31,83 @@ final class ChatViewModel {
     let sessionId: String
     let workspacePath: String
 
-    /// The system prompt to send as a synthetic part on every message, if any.
-    private let systemPrompt: String?
-
     private var assistantMessageId: String?
-    private weak var workspaceViewModel: WorkspaceViewModel?
+    private var agentManagerClient: AgentManagerClient?
+    private var webSocketTask: Task<Void, Never>?
 
-    init(agentId: String, sessionId: String, workspacePath: String, workspaceViewModel: WorkspaceViewModel, agentMetadata: AgentMetadata? = nil) {
+    init(agentId: String, sessionId: String, workspacePath: String) {
         self.agentId = agentId
         self.sessionId = sessionId
         self.workspacePath = workspacePath
-        self.workspaceViewModel = workspaceViewModel
+    }
 
-        // Use PromptTemplateManager to get the full prompt template with specialist role injected
-        if let agent = agentMetadata {
-            self.systemPrompt = PromptTemplateManager().getPrompt(for: agent, workspacePath: workspacePath)
-        } else {
-            self.systemPrompt = nil
+    // MARK: - WebSocket Connection
+
+    /// Connect to the agent-manager WebSocket for this agent.
+    func connectWebSocket(serverManager: ServerManager) async {
+        guard let baseURL = serverManager.agentManagerURL(for: workspacePath) else {
+            print("[ChatVM] No agent-manager URL available for \(workspacePath)")
+            return
         }
-    }
 
-    // MARK: - Event Registration (Workspace-Level SSE)
+        let client = AgentManagerClient(baseURL: baseURL)
+        self.agentManagerClient = client
+        let frameStream = client.connect(agentId: agentId)
 
-    /// Register to receive SSE events routed from the workspace-level connection.
-    func registerForEvents() {
-        workspaceViewModel?.registerEventHandler(sessionId: sessionId) { [weak self] event in
-            await self?.handleSSEEvent(event)
+        webSocketTask = Task { [weak self] in
+            for await frame in frameStream {
+                guard let self else { break }
+                guard !Task.isCancelled else { break }
+                await self.handleFrame(frame)
+            }
         }
+
+        print("[ChatVM] WebSocket connected for agent \(agentId)")
     }
 
-    /// Unregister from receiving SSE events (tab closed, but SSE stays connected).
-    func unregisterForEvents() {
-        workspaceViewModel?.unregisterEventHandler(sessionId: sessionId)
+    /// Disconnect the WebSocket.
+    func disconnectWebSocket() {
+        webSocketTask?.cancel()
+        webSocketTask = nil
+        agentManagerClient?.disconnect()
+        agentManagerClient = nil
+        print("[ChatVM] WebSocket disconnected for agent \(agentId)")
     }
 
-    /// Handle an SSE event routed from the workspace-level connection.
-    private func handleSSEEvent(_ event: SSEEvent) async {
-        guard let jsonData = event.data.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
-        else { return }
+    // MARK: - Handle WebSocket Frames
 
-        let eventType = json["type"] as? String ?? ""
-        let properties = json["properties"] as? [String: Any] ?? [:]
+    private func handleFrame(_ frame: AgentManagerFrame) async {
+        switch frame {
+        case .messageStart(let messageId):
+            self.assistantMessageId = messageId
+            print("[ChatVM] WS: message.start messageId=\(messageId)")
 
-        // Extract message ID from event properties
-        let msgId = properties["messageID"] as? String
-            ?? (properties["info"] as? [String: Any])?["id"] as? String
-            ?? (properties["part"] as? [String: Any])?["messageID"] as? String
-
-        // Extract role from event properties
-        let role = (properties["info"] as? [String: Any])?["role"] as? String
-
-        print("[ChatVM] SSE: type=\(eventType) role=\(role ?? "nil") msgId=\(msgId ?? "nil")")
-
-        switch eventType {
-        case "message.updated":
-            if let info = properties["info"] as? [String: Any],
-               let messageRole = info["role"] as? String,
-               let messageId = info["id"] as? String {
-                if messageRole == "assistant" {
-                    self.assistantMessageId = messageId
-                    print("[ChatVM] SSE: tracking assistant messageId=\(messageId)")
+        case .delta(let partId, let field, let delta):
+            guard let assistantId = self.assistantMessageId else { break }
+            if var part = self.streamingParts[partId] {
+                if field == "text" {
+                    part.text = (part.text ?? "") + delta
                 }
-                // Finalize when assistant message has completed time
-                if messageRole == "assistant",
-                   let time = info["time"] as? [String: Any],
-                   time["completed"] != nil {
-                    self.finalizeStreamingMessage()
-                }
+                self.streamingParts[partId] = part
+            } else {
+                let newPart = MessagePart(
+                    id: partId,
+                    messageID: assistantId,
+                    type: .text,
+                    text: field == "text" ? delta : nil
+                )
+                self.streamingParts[partId] = newPart
+                self.streamingPartOrder.append(partId)
             }
 
-        case "message.part.delta":
-            guard let assistantId = self.assistantMessageId else {
-                print("[ChatVM] SSE: skipping delta, no assistant message identified yet")
-                break
-            }
-            if let deltaMsgId = properties["messageID"] as? String,
-               deltaMsgId != assistantId {
-                break
-            }
-            if let partID = properties["partID"] as? String,
-               let field = properties["field"] as? String,
-               let delta = properties["delta"] as? String {
-                if var part = self.streamingParts[partID] {
-                    switch field {
-                    case "text":
-                        part.text = (part.text ?? "") + delta
-                    default:
-                        print("[ChatVM] SSE: unknown delta field '\(field)'")
-                    }
-                    self.streamingParts[partID] = part
-                } else {
-                    let newPart = MessagePart(
-                        id: partID,
-                        messageID: assistantId,
-                        type: .text,
-                        text: field == "text" ? delta : nil
-                    )
-                    self.streamingParts[partID] = newPart
-                    self.streamingPartOrder.append(partID)
-                }
-            }
-
-        case "message.part.updated":
-            guard let assistantId = self.assistantMessageId else {
-                break
-            }
-            guard let partDict = properties["part"] as? [String: Any] else { break }
-            let partMsgId = partDict["messageID"] as? String
-            if let partMsgId = partMsgId, partMsgId != assistantId {
-                break
-            }
-            guard let partID = partDict["id"] as? String,
-                  let typeStr = partDict["type"] as? String else { break }
-
+        case .partUpdated(let partId, let partWrapper):
+            guard let assistantId = self.assistantMessageId else { break }
+            let partDict = partWrapper.value
+            let typeStr = partDict["type"] as? String ?? "text"
             let partType = MessagePartType(rawValue: typeStr) ?? .text
-            var part = self.streamingParts[partID] ?? MessagePart(
-                id: partID,
-                messageID: partMsgId ?? assistantId,
+            var part = self.streamingParts[partId] ?? MessagePart(
+                id: partId,
+                messageID: assistantId,
                 type: partType
             )
 
@@ -171,22 +130,20 @@ final class ChatViewModel {
                 }
             }
 
-            self.streamingParts[partID] = part
-            if !self.streamingPartOrder.contains(partID) {
-                self.streamingPartOrder.append(partID)
+            self.streamingParts[partId] = part
+            if !self.streamingPartOrder.contains(partId) {
+                self.streamingPartOrder.append(partId)
             }
 
-        case "session.idle":
-            // Don't break the connection — just mark loading as done
+        case .messageComplete(_, _, _):
+            self.finalizeStreamingMessage()
+
+        case .error(let message):
+            self.error = message
             self.isLoading = false
 
-        case "server.heartbeat", "server.connected", "file.watcher.updated",
-             "session.updated", "session.diff", "session.status",
-             "todo.updated":
-            break
-
-        default:
-            print("[ChatVM] SSE event: \(eventType)")
+        case .idle:
+            self.isLoading = false
         }
     }
 
@@ -210,21 +167,35 @@ final class ChatViewModel {
         isLoading = false
     }
 
-    // MARK: - Load Conversation from Server
+    // MARK: - Load Conversation from Agent Manager
 
     func loadConversation(serverManager: ServerManager) async {
+        guard let baseURL = serverManager.agentManagerURL(for: workspacePath) else {
+            print("[ChatVM] No agent-manager URL for loading conversation")
+            return
+        }
+
         do {
-            let serverInfo = try await serverManager.getOrStart(workspacePath: workspacePath)
-            let client = OpenCodeClient(serverInfo: serverInfo)
-            let serverMessages = try await client.getMessages(sessionId: sessionId)
+            let client = AgentManagerClient(baseURL: baseURL)
+            let conversation = try await client.getConversation(agentId: agentId)
 
-            // Convert server messages to ConversationMessage with full part data
-            messages = serverMessages.compactMap { msg -> ConversationMessage? in
-                let role: MessageRole = msg.info.role == "user" ? .user : .assistant
-                let messageParts = Self.convertPromptParts(msg.parts, messageID: msg.info.id)
-                let textContent = msg.parts.compactMap { $0.text }.joined(separator: "\n")
+            messages = conversation.messages.compactMap { msg -> ConversationMessage? in
+                let role: MessageRole = msg.role == "user" ? .user : .assistant
+                let textContent = msg.contentBlocks
+                    .filter { $0.type == "text" }
+                    .compactMap { $0.text }
+                    .joined(separator: "\n")
 
-                // Skip messages with no text content and no tool parts
+                let messageParts = msg.contentBlocks.enumerated().compactMap { (index, block) -> MessagePart? in
+                    guard let partType = MessagePartType(rawValue: block.type) else { return nil }
+                    return MessagePart(
+                        id: "\(msg.id)-\(index)",
+                        messageID: msg.id,
+                        type: partType,
+                        text: block.text
+                    )
+                }
+
                 let hasToolParts = messageParts.contains { $0.type == .tool }
                 guard !textContent.isEmpty || hasToolParts else { return nil }
 
@@ -232,20 +203,18 @@ final class ChatViewModel {
                     role: role,
                     content: textContent,
                     parts: messageParts,
-                    timestamp: msg.info.time?.created.map {
-                        ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: $0 / 1000))
-                    } ?? ISO8601DateFormatter().string(from: Date()),
+                    timestamp: msg.timestamp ?? ISO8601DateFormatter().string(from: Date()),
                     tokens: nil,
                     cost: nil
                 )
             }
         } catch {
-            print("[ChatVM] Failed to load conversation from server: \(error)")
+            print("[ChatVM] Failed to load conversation from agent-manager: \(error)")
             messages = []
         }
     }
 
-    // MARK: - Send Message (prompt only — response comes via persistent SSE connection)
+    // MARK: - Send Message (via WebSocket)
 
     func sendMessage(serverManager: ServerManager) async {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -267,22 +236,20 @@ final class ChatViewModel {
         assistantMessageId = nil
         error = nil
 
-        do {
-            let serverInfo = try await serverManager.getOrStart(workspacePath: workspacePath)
-            let client = OpenCodeClient(serverInfo: serverInfo)
-            // Send systemPrompt as a synthetic part on every message (Intent/ACP pattern)
-            try await client.sendPromptFireAndForget(sessionId: sessionId, text: text, systemPrompt: systemPrompt)
-            // Response will arrive via the persistent SSE connection
-        } catch {
-            self.error = error.localizedDescription
-            isLoading = false
+        // Ensure WebSocket is connected
+        if agentManagerClient == nil {
+            await connectWebSocket(serverManager: serverManager)
         }
+
+        // Send message via WebSocket
+        agentManagerClient?.sendMessage(text)
     }
 
     // MARK: - Cancel Streaming
 
     func cancelStreaming() {
-        // Note: Don't disconnect SSE — it's persistent. Just finalize the current streaming state.
+        agentManagerClient?.sendCancel()
+
         if !streamingParts.isEmpty {
             let finalParts = streamingPartOrder.compactMap { streamingParts[$0] }
             let assistantMessage = ConversationMessage(
@@ -298,36 +265,6 @@ final class ChatViewModel {
             streamingPartOrder = []
         }
         isLoading = false
-    }
-
-    // MARK: - Helpers
-
-    /// Convert server PromptPart array to MessagePart array.
-    static func convertPromptParts(_ promptParts: [PromptPart], messageID: String) -> [MessagePart] {
-        return promptParts.compactMap { pp -> MessagePart? in
-            guard let partType = MessagePartType(rawValue: pp.type) else { return nil }
-            var part = MessagePart(
-                id: pp.id ?? UUID().uuidString,
-                messageID: pp.messageID ?? messageID,
-                type: partType,
-                text: pp.text
-            )
-            if partType == .tool {
-                part.toolName = pp.tool
-                part.toolCallID = pp.callID
-                if let state = pp.state {
-                    if let statusStr = state.status {
-                        part.toolStatus = ToolStatus(rawValue: statusStr)
-                    }
-                    part.toolTitle = state.title
-                    part.toolOutput = state.output
-                    if let input = state.input {
-                        part.toolInput = stringifyJSON(input.value)
-                    }
-                }
-            }
-            return part
-        }
     }
 }
 

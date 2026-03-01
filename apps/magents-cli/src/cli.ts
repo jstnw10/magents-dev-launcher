@@ -26,6 +26,7 @@ import { SpecialistRegistry, type InteractiveIO } from "./specialist-registry";
 import { OpenCodeServer } from "./opencode-server";
 import { createOpenCodeClient } from "./opencode-client";
 import { createMcpServer } from "./mcp/server";
+import { AgentServer, DEFAULT_AGENT_SERVER_PORT } from "./agent-server";
 
 export interface AgentDeps {
   readonly server: Pick<OpenCodeServer, "start" | "stop" | "status" | "getOrStart">;
@@ -387,6 +388,38 @@ export async function runCli(argv: string[], deps?: CliDependencies) {
         if (command === "server-status") {
           const result = await server.status(workspacePath);
           resolvedDeps.stdout(json(result));
+          return 0;
+        }
+
+        if (command === "manager-start") {
+          const port = parseInt(parseValue(args, "--port") ?? String(DEFAULT_AGENT_SERVER_PORT), 10);
+          const serverInfo = await server.getOrStart(workspacePath);
+          const mgr = agentDeps.createManager(serverInfo.url);
+          const agentServer = new AgentServer({
+            workspacePath,
+            manager: mgr,
+            openCodeUrl: serverInfo.url,
+            port,
+          });
+          const info = await agentServer.start();
+          resolvedDeps.stdout(json(info));
+          // Keep process alive
+          await new Promise(() => {});
+          return 0;
+        }
+
+        if (command === "manager-stop") {
+          // Read server info and signal stop
+          const infoPath = `${workspacePath}/.workspace/agent-manager/server.json`;
+          try {
+            const file = Bun.file(infoPath);
+            if (await file.exists()) {
+              await file.delete();
+            }
+          } catch {
+            // Already gone
+          }
+          resolvedDeps.stdout(json({ stopped: true }));
           return 0;
         }
 

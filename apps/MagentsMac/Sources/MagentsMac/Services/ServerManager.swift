@@ -4,6 +4,7 @@ import os
 
 /// Tracks and controls the OpenCode server lifecycle per workspace.
 /// Spawns `opencode serve` natively instead of shelling out to the `magents` CLI.
+/// Also manages the agent-manager WebSocket server alongside OpenCode.
 @MainActor
 @Observable
 final class ServerManager {
@@ -18,8 +19,13 @@ final class ServerManager {
 
     var serverStatus: [String: ServerStatus] = [:]
 
+    /// Agent-manager server info per workspace (keyed by workspace path).
+    var agentManagerInfo: [String: AgentManagerServerInfo] = [:]
+
     /// Keep references to running processes so they don't get deallocated.
     private var runningProcesses: [String: Process] = [:]
+    /// Agent-manager processes per workspace.
+    private var agentManagerProcesses: [String: Process] = [:]
     private var nextPort: Int = 4096
 
     private let fileManager = WorkspaceFileManager()
@@ -53,10 +59,13 @@ final class ServerManager {
     // MARK: - Get or Start
 
     /// Ensures a server is running for the workspace. Returns the ServerInfo.
+    /// Also starts the agent-manager server alongside OpenCode.
     func getOrStart(workspacePath: String) async throws -> ServerInfo {
         // Check if already running in-memory
         if case .running(let info) = serverStatus[workspacePath] {
             if isPIDAlive(info.pid) {
+                // Also ensure agent-manager is running
+                await ensureAgentManager(workspacePath: workspacePath, openCodeURL: info.url)
                 return info
             }
         }
@@ -65,11 +74,22 @@ final class ServerManager {
         if let info = try? await fileManager.readServerInfo(workspacePath: workspacePath),
            isPIDAlive(info.pid) {
             serverStatus[workspacePath] = .running(info)
+            // Also ensure agent-manager is running
+            await ensureAgentManager(workspacePath: workspacePath, openCodeURL: info.url)
             return info
         }
 
         // Need to start
-        return try await startServer(workspacePath: workspacePath)
+        let info = try await startServer(workspacePath: workspacePath)
+        // Start agent-manager after OpenCode is ready
+        await ensureAgentManager(workspacePath: workspacePath, openCodeURL: info.url)
+        return info
+    }
+
+    /// Returns the agent-manager base URL for a workspace, if available.
+    func agentManagerURL(for workspacePath: String) -> URL? {
+        guard let info = agentManagerInfo[workspacePath] else { return nil }
+        return URL(string: info.url)
     }
 
     // MARK: - Start
@@ -184,6 +204,159 @@ final class ServerManager {
             }
         }
         runningProcesses.removeAll()
+
+        for (_, process) in agentManagerProcesses {
+            if process.isRunning {
+                process.terminate()
+            }
+        }
+        agentManagerProcesses.removeAll()
+    }
+
+    // MARK: - Agent Manager
+
+    /// Ensures the agent-manager server is running for the workspace.
+    private func ensureAgentManager(workspacePath: String, openCodeURL: String) async {
+        // Check if already running in-memory
+        if let process = agentManagerProcesses[workspacePath], process.isRunning {
+            // Already running — just make sure we have the info
+            if agentManagerInfo[workspacePath] == nil {
+                agentManagerInfo[workspacePath] = readAgentManagerInfo(workspacePath: workspacePath)
+            }
+            return
+        }
+
+        // Check if server.json exists on disk (started externally)
+        if let info = readAgentManagerInfo(workspacePath: workspacePath) {
+            agentManagerInfo[workspacePath] = info
+            return
+        }
+
+        // Start agent-manager
+        do {
+            try await startAgentManager(workspacePath: workspacePath, openCodeURL: openCodeURL)
+        } catch {
+            print("[ServerManager] Failed to start agent-manager: \(error)")
+        }
+    }
+
+    private func startAgentManager(workspacePath: String, openCodeURL: String) async throws {
+        // Find bun binary
+        let bunPath = try await findBunBinary()
+
+        // Find the CLI entry point relative to the app or workspace
+        let cliPath = try findCliEntryPoint()
+
+        // Allocate port for agent-manager
+        var port = nextPort
+        nextPort += 1
+        while !isPortAvailable(port) {
+            port = nextPort
+            nextPort += 1
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: bunPath)
+        process.arguments = [
+            "run", cliPath,
+            "agent", "manager-start",
+            "--workspace-path", workspacePath,
+            "--port", String(port)
+        ]
+        process.currentDirectoryURL = URL(fileURLWithPath: workspacePath)
+
+        let env = ProcessInfo.processInfo.environment
+        process.environment = env
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        try process.run()
+
+        // Wait for server.json to appear (the manager-start command writes it)
+        let info = try await waitForAgentManagerReady(workspacePath: workspacePath, port: port, process: process)
+
+        agentManagerProcesses[workspacePath] = process
+        agentManagerInfo[workspacePath] = info
+        print("[ServerManager] Agent-manager started on port \(info.port) for \(workspacePath)")
+    }
+
+    private func readAgentManagerInfo(workspacePath: String) -> AgentManagerServerInfo? {
+        let path = "\(workspacePath)/.workspace/agent-manager/server.json"
+        guard Foundation.FileManager.default.fileExists(atPath: path),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let info = try? JSONDecoder().decode(AgentManagerServerInfo.self, from: data) else {
+            return nil
+        }
+        return info
+    }
+
+    private func waitForAgentManagerReady(workspacePath: String, port: Int, process: Process) async throws -> AgentManagerServerInfo {
+        // Poll for server.json to appear (agent-manager writes it on start)
+        for _ in 0..<30 { // 15 seconds max
+            try await Task.sleep(for: .milliseconds(500))
+            if let info = readAgentManagerInfo(workspacePath: workspacePath) {
+                return info
+            }
+            if !process.isRunning {
+                throw ServerManagerError.agentManagerStartFailed
+            }
+        }
+        // Timeout — construct expected info
+        return AgentManagerServerInfo(
+            port: port,
+            url: "http://127.0.0.1:\(port)",
+            startedAt: ISO8601DateFormatter().string(from: Date())
+        )
+    }
+
+    private func findBunBinary() async throws -> String {
+        // 1. Check ~/.magents/config.json for bunPath
+        let home = Foundation.FileManager.default.homeDirectoryForCurrentUser.path
+        let configPath = "\(home)/.magents/config.json"
+        if Foundation.FileManager.default.fileExists(atPath: configPath),
+           let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
+           let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let path = config["bunPath"] as? String,
+           Foundation.FileManager.default.fileExists(atPath: path) {
+            return path
+        }
+
+        // 2. Fall back to `which bun`
+        let result = try await ShellRunner.run("which bun")
+        let path = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard result.exitCode == 0, !path.isEmpty else {
+            throw ServerManagerError.bunNotFound
+        }
+        return path
+    }
+
+    private func findCliEntryPoint() throws -> String {
+        // 1. Check ~/.magents/config.json for cliPath
+        let home = Foundation.FileManager.default.homeDirectoryForCurrentUser.path
+        let configPath = "\(home)/.magents/config.json"
+        if Foundation.FileManager.default.fileExists(atPath: configPath),
+           let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
+           let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let path = config["cliPath"] as? String,
+           Foundation.FileManager.default.fileExists(atPath: path) {
+            return path
+        }
+
+        // 2. Check common relative paths from the repo root
+        let candidates = [
+            "apps/magents-cli/src/cli.ts",
+            "../magents-cli/src/cli.ts",
+        ]
+        for candidate in candidates {
+            if Foundation.FileManager.default.fileExists(atPath: candidate) {
+                return candidate
+            }
+        }
+
+        throw ServerManagerError.cliNotFound
     }
 
     // MARK: - Helpers
@@ -296,6 +469,9 @@ enum ServerManagerError: Error, LocalizedError {
     case startFailed(exitCode: Int32)
     case stopFailed(exitCode: Int32)
     case opencodeNotFound
+    case bunNotFound
+    case cliNotFound
+    case agentManagerStartFailed
 
     var errorDescription: String? {
         switch self {
@@ -305,6 +481,12 @@ enum ServerManagerError: Error, LocalizedError {
             return "Failed to stop server (exit code \(code))"
         case .opencodeNotFound:
             return "opencode binary not found. Install it or set opencodePath in ~/.magents/config.json"
+        case .bunNotFound:
+            return "bun binary not found. Install it or set bunPath in ~/.magents/config.json"
+        case .cliNotFound:
+            return "magents CLI entry point not found. Set cliPath in ~/.magents/config.json"
+        case .agentManagerStartFailed:
+            return "Failed to start agent-manager server"
         }
     }
 }

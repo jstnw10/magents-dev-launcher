@@ -319,6 +319,82 @@ describe("AgentManager", () => {
       expect(response.content).toBe("Part one. Part two.");
     });
 
+    it("injects systemPrompt as synthetic part when present", async () => {
+      let capturedParams: unknown;
+      const client = createMockClient({
+        prompt: async (params) => {
+          capturedParams = params;
+          return {
+            data: {
+              info: { id: "m1", role: "assistant" },
+              parts: [{ type: "text", text: "ok" }],
+            },
+          };
+        },
+      });
+      const mgr = new AgentManager({ client });
+      const agent = await mgr.createAgent(workspacePath, {
+        label: "specialist-agent",
+        systemPrompt: "You are a specialist. Follow these rules.",
+      });
+
+      await mgr.sendMessage(workspacePath, agent.agentId, "do the task");
+
+      expect(capturedParams).toEqual({
+        path: { id: "session-abc-123" },
+        body: {
+          parts: [
+            { type: "text", text: "You are a specialist. Follow these rules.", synthetic: true },
+            { type: "text", text: "do the task" },
+          ],
+        },
+      });
+    });
+
+    it("does not inject synthetic part when no systemPrompt", async () => {
+      let capturedParams: unknown;
+      const client = createMockClient({
+        prompt: async (params) => {
+          capturedParams = params;
+          return {
+            data: {
+              info: { id: "m1", role: "assistant" },
+              parts: [{ type: "text", text: "ok" }],
+            },
+          };
+        },
+      });
+      const mgr = new AgentManager({ client });
+      const agent = await mgr.createAgent(workspacePath, {
+        label: "no-specialist",
+      });
+
+      await mgr.sendMessage(workspacePath, agent.agentId, "hello");
+
+      expect(capturedParams).toEqual({
+        path: { id: "session-abc-123" },
+        body: {
+          parts: [{ type: "text", text: "hello" }],
+        },
+      });
+    });
+
+    it("conversation log only contains user text, not synthetic prompt", async () => {
+      const client = createMockClient();
+      const mgr = new AgentManager({ client });
+      const agent = await mgr.createAgent(workspacePath, {
+        label: "conv-check",
+        systemPrompt: "Be helpful.",
+      });
+
+      await mgr.sendMessage(workspacePath, agent.agentId, "user question");
+
+      const conversation = await mgr.getConversation(workspacePath, agent.agentId);
+      const userMsg = conversation.messages.find((m) => m.role === "user");
+      expect(userMsg?.content).toBe("user question");
+      expect(userMsg?.parts).toEqual([{ type: "text", text: "user question" }]);
+    });
+
     it("handles empty response data", async () => {
       const client = createMockClient({
         prompt: async () => ({ data: undefined }),

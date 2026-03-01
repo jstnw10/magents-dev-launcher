@@ -225,56 +225,34 @@ struct CreateWorkspaceSheet: View {
 
     private func createCoordinatorAgent(for config: WorkspaceConfig) async {
         do {
-            // 1. Get or start server
-            let serverInfo = try await serverManager.getOrStart(workspacePath: config.path)
+            // 1. Ensure server is running (starts OpenCode + agent-manager)
+            _ = try await serverManager.getOrStart(workspacePath: config.path)
 
-            // 2. Create OpenCode session
-            let client = OpenCodeClient(serverInfo: serverInfo)
-            let session = try await client.createSession(
-                directory: config.path,
-                title: "Coordinator"
-            )
+            guard let baseURL = serverManager.agentManagerURL(for: config.path) else {
+                print("Failed to auto-create Coordinator agent: agent-manager not available")
+                return
+            }
 
-            // 3. Load coordinator specialist prompt
-            let loader = SpecialistLoader()
-            let specialists = await loader.loadSpecialists()
-            let coordinatorSpec = specialists.first { $0.id == "coordinator" }
-
-            // 4. Build agent metadata
-            let agentId = UUID().uuidString.lowercased()
-            let metadata = AgentMetadata(
-                agentId: agentId,
-                sessionId: session.id,
+            // 2. Create agent via agent-manager HTTP — it auto-resolves specialist prompts
+            let client = AgentManagerClient(baseURL: baseURL)
+            let metadata = try await client.createAgent(
                 label: "Coordinator",
                 model: "opencode/claude-opus-4-6",
-                agent: nil,
-                specialistId: "coordinator",
-                systemPrompt: coordinatorSpec?.systemPrompt,
-                createdAt: ISO8601DateFormatter().string(from: Date())
+                specialistId: "coordinator"
             )
 
-            // 5. Write agent JSON to disk
-            let agentsDir = "\(config.path)/.workspace/opencode/agents"
-            let fm = FileManager.default
-            if !fm.fileExists(atPath: agentsDir) {
-                try fm.createDirectory(atPath: agentsDir, withIntermediateDirectories: true)
-            }
-            let filePath = "\(agentsDir)/\(agentId).json"
-            let data = try JSONEncoder().encode(metadata)
-            try data.write(to: URL(fileURLWithPath: filePath))
-
-            // 6. Refresh agents list
+            // 3. Refresh agents list
             viewModel.agentsForWorkspace[config.id] = nil
             if let workspace = viewModel.workspaces.first(where: { $0.id == config.id }) {
                 await viewModel.loadAgents(for: workspace)
             }
 
-            // 7. Select workspace and open chat tab
+            // 4. Select workspace and open chat tab
             viewModel.selectedWorkspaceId = config.id
             tabManager.openTab(TabItem(
                 title: "Coordinator",
                 icon: "bubble.left.fill",
-                contentType: .chat(agentId: agentId),
+                contentType: .chat(agentId: metadata.agentId),
                 workspaceId: config.id
             ))
         } catch {

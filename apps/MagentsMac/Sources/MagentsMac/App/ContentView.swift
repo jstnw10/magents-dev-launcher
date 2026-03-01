@@ -70,9 +70,7 @@ struct ContentView: View {
                 ChatView(
                     agentId: agentId,
                     sessionId: agent.sessionId,
-                    workspacePath: workspacePath,
-                    workspaceViewModel: viewModel,
-                    agentMetadata: agent
+                    workspacePath: workspacePath
                 )
             } else {
                 contentUnavailableView(

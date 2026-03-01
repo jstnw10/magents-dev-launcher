@@ -222,10 +222,17 @@ export class AgentManager {
   ): Promise<ConversationMessage> {
     const metadata = await this.getAgent(workspacePath, agentId);
 
+    // Build prompt parts — inject specialist system prompt if present
+    const promptParts: Array<{ type: string; text?: string; [key: string]: unknown }> = [];
+    if (metadata.systemPrompt) {
+      promptParts.push({ type: "text", text: metadata.systemPrompt, synthetic: true });
+    }
+    promptParts.push({ type: "text", text });
+
     const result = await this.client.session.prompt({
       path: { id: metadata.sessionId },
       body: {
-        parts: [{ type: "text", text }],
+        parts: promptParts,
       },
     });
 

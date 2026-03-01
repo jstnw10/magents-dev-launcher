@@ -1,13 +1,15 @@
 import Foundation
 import Observation
 
-/// Drives the Create Agent sheet: loads specialists, validates input, creates agent.
+/// Drives the Create Agent sheet: loads specialists from agent-manager, validates input,
+/// creates agent via agent-manager HTTP API.
+/// The macOS app never touches prompts — agent-manager handles specialist resolution.
 @MainActor
 @Observable
 final class AgentCreationViewModel {
 
-    var specialists: [SpecialistDefinition] = []
-    var selectedSpecialist: SpecialistDefinition? {
+    var specialists: [SpecialistSummary] = []
+    var selectedSpecialist: SpecialistSummary? {
         didSet { applySpecialistDefaults() }
     }
     var label: String = ""
@@ -15,56 +17,45 @@ final class AgentCreationViewModel {
     var isCreating = false
     var error: String?
 
-    private let loader = SpecialistLoader()
-
     // MARK: - Load
 
-    func loadSpecialists() async {
-        specialists = await loader.loadSpecialists()
+    /// Loads specialists from agent-manager HTTP API.
+    func loadSpecialists(serverManager: ServerManager, workspacePath: String) async {
+        guard let baseURL = serverManager.agentManagerURL(for: workspacePath) else {
+            // Fallback: no agent-manager running yet
+            return
+        }
+        do {
+            let client = AgentManagerClient(baseURL: baseURL)
+            specialists = try await client.listSpecialists()
+        } catch {
+            print("[AgentCreationVM] Failed to load specialists: \(error)")
+        }
     }
 
     // MARK: - Create
 
-    /// Creates an agent, writes metadata to disk, and returns the metadata.
-    /// Uses ServerManager to ensure the OpenCode server is running.
+    /// Creates an agent via agent-manager HTTP API.
+    /// Agent-manager auto-resolves specialist prompts from specialistId.
     func createAgent(workspacePath: String, serverManager: ServerManager) async throws -> AgentMetadata {
         isCreating = true
         error = nil
         defer { isCreating = false }
 
-        // 1. Get or start server via ServerManager
-        let serverInfo = try await serverManager.getOrStart(workspacePath: workspacePath)
+        // Ensure server is running
+        _ = try await serverManager.getOrStart(workspacePath: workspacePath)
 
-        // 2. Create OpenCode session
-        let client = OpenCodeClient(serverInfo: serverInfo)
-        let session = try await client.createSession(
-            directory: workspacePath,
-            title: label.isEmpty ? "Agent" : label
-        )
-
-        // 3. Build metadata
-        let agentId = UUID().uuidString.lowercased()
-        let metadata = AgentMetadata(
-            agentId: agentId,
-            sessionId: session.id,
-            label: label.isEmpty ? (selectedSpecialist?.name ?? "Agent") : label,
-            model: model.isEmpty ? nil : model,
-            agent: nil,
-            specialistId: selectedSpecialist?.id,
-            systemPrompt: selectedSpecialist?.systemPrompt,
-            createdAt: ISO8601DateFormatter().string(from: Date())
-        )
-
-        // 4. Write to disk
-        let agentsDir = "\(workspacePath)/.workspace/opencode/agents"
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: agentsDir) {
-            try fm.createDirectory(atPath: agentsDir, withIntermediateDirectories: true)
+        guard let baseURL = serverManager.agentManagerURL(for: workspacePath) else {
+            throw AgentCreationError.serverNotRunning
         }
 
-        let filePath = "\(agentsDir)/\(agentId).json"
-        let data = try JSONEncoder().encode(metadata)
-        try data.write(to: URL(fileURLWithPath: filePath))
+        let client = AgentManagerClient(baseURL: baseURL)
+        let agentLabel = label.isEmpty ? (selectedSpecialist?.name ?? "Agent") : label
+        let metadata = try await client.createAgent(
+            label: agentLabel,
+            model: model.isEmpty ? nil : model,
+            specialistId: selectedSpecialist?.id
+        )
 
         return metadata
     }
@@ -96,7 +87,7 @@ enum AgentCreationError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .serverNotRunning:
-            return "OpenCode server is not running. Start the server first."
+            return "Agent-manager server is not running. Start the server first."
         }
     }
 }

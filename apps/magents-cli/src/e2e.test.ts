@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { OpenCodeServer } from "./opencode-server";
 import { createOpenCodeClient } from "./opencode-client";
 import { AgentManager } from "./agent-manager";
+import { AgentServer } from "./agent-server";
 import { detectOpencodePath } from "./opencode-resolver";
 
 const SKIP_E2E = process.env.SKIP_E2E === "1";
@@ -206,4 +207,100 @@ describe.skipIf(SKIP_E2E || !opencodeAvailable)("E2E: OpenCode integration", () 
     },
     120_000,
   );
+}, 180_000);
+
+describe.skipIf(SKIP_E2E || !opencodeAvailable)("E2E: AgentServer integration", () => {
+  let workspacePath: string;
+  let ocServer: OpenCodeServer;
+  let ocServerInfo: { pid: number; port: number; url: string };
+  let agentServer: AgentServer;
+  let agentServerPort: number;
+
+  beforeAll(async () => {
+    workspacePath = await mkdtemp(join(tmpdir(), "magents-e2e-agentserver-"));
+    const ocPort = await findFreePort();
+    ocServer = new OpenCodeServer({
+      timeout: 30_000,
+      allocatePort: async () => ocPort,
+    });
+    ocServerInfo = await ocServer.start(workspacePath);
+
+    // Start agent-server pointing at the real OpenCode server
+    const client = createOpenCodeClient(ocServerInfo.url);
+    const manager = new AgentManager({ client });
+    agentServerPort = await findFreePort();
+    agentServer = new AgentServer({
+      workspacePath,
+      manager,
+      openCodeUrl: ocServerInfo.url,
+      port: agentServerPort,
+    });
+    await agentServer.start();
+  }, 30_000);
+
+  afterAll(async () => {
+    if (agentServer) {
+      await agentServer.stop();
+    }
+    if (ocServer && workspacePath) {
+      await ocServer.stop(workspacePath);
+    }
+    if (workspacePath) {
+      await rm(workspacePath, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("creates agent, sends message via WebSocket, and verifies conversation", async () => {
+    const baseUrl = `http://127.0.0.1:${agentServerPort}`;
+
+    // 1. Create agent via HTTP POST
+    const createRes = await fetch(`${baseUrl}/agent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: "e2e-ws-agent" }),
+    });
+    expect(createRes.status).toBe(201);
+    const agent = await createRes.json() as { agentId: string; sessionId: string; label: string };
+    expect(agent.agentId).toMatch(/^agent-/);
+
+    // 2. Connect WebSocket
+    const ws = new WebSocket(`ws://127.0.0.1:${agentServerPort}/agent/${agent.agentId}`);
+
+    const opened = await new Promise<boolean>((resolve) => {
+      ws.onopen = () => resolve(true);
+      ws.onerror = () => resolve(false);
+      setTimeout(() => resolve(false), 5000);
+    });
+    expect(opened).toBe(true);
+
+    // 3. Send message and collect response frames
+    const frames: Array<Record<string, unknown>> = [];
+    const messageComplete = new Promise<void>((resolve) => {
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data as string);
+        frames.push(data);
+        if (data.type === "message.complete") {
+          resolve();
+        }
+      };
+      setTimeout(() => resolve(), 60_000);
+    });
+
+    ws.send(JSON.stringify({ type: "message", text: "What is 1 + 1? Reply with just the number." }));
+    await messageComplete;
+    ws.close();
+
+    // 4. Verify we received streaming frames
+    const frameTypes = frames.map((f) => f.type);
+    expect(frameTypes).toContain("message.start");
+    expect(frameTypes).toContain("message.complete");
+
+    // 5. Verify conversation via GET endpoint
+    const convRes = await fetch(`${baseUrl}/agent/${agent.agentId}/conversation`);
+    expect(convRes.status).toBe(200);
+    const conv = await convRes.json() as { agentId: string; messages: unknown[] };
+    expect(conv.agentId).toBe(agent.agentId);
+    // Conversation should be empty via the manager endpoint (it uses the opencode path, not agent-server log)
+    // The agent-server logs to .workspace/agents/ separately
+  }, 90_000);
 }, 180_000);
