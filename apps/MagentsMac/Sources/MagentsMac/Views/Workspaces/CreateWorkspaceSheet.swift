@@ -80,23 +80,23 @@ final class CreateWorkspaceViewModel {
         setupCommand = ""
     }
 
-    func createWorkspace() async -> Bool {
+    func createWorkspace() async -> WorkspaceConfig? {
         isCreating = true
         errorMessage = nil
         defer { isCreating = false }
 
         do {
             let wfm = WorkspaceFileManager()
-            _ = try await wfm.createWorkspace(
+            let config = try await wfm.createWorkspace(
                 repositoryPath: repositoryPath,
                 title: title.isEmpty ? nil : title,
                 baseRef: baseBranch,
                 setupCommand: setupCommand.isEmpty ? nil : setupCommand
             )
-            return true
+            return config
         } catch {
             errorMessage = "Creation failed: \(error.localizedDescription)"
-            return false
+            return nil
         }
     }
 }
@@ -104,6 +104,7 @@ final class CreateWorkspaceViewModel {
 struct CreateWorkspaceSheet: View {
     @Environment(WorkspaceViewModel.self) private var viewModel
     @Environment(TabManager.self) private var tabManager
+    @Environment(ServerManager.self) private var serverManager
     @Environment(\.dismiss) private var dismiss
     @State private var createVM = CreateWorkspaceViewModel()
 
@@ -194,11 +195,13 @@ struct CreateWorkspaceSheet: View {
 
                 Button {
                     Task {
-                        let success = await createVM.createWorkspace()
-                        if success {
-                            await viewModel.loadWorkspaces()
-                            dismiss()
-                        }
+                        guard let config = await createVM.createWorkspace() else { return }
+                        await viewModel.loadWorkspaces()
+
+                        // Auto-create Coordinator agent
+                        await createCoordinatorAgent(for: config)
+
+                        dismiss()
                     }
                 } label: {
                     if createVM.isCreating {
@@ -216,6 +219,67 @@ struct CreateWorkspaceSheet: View {
             .padding()
         }
         .frame(width: 480, height: 520)
+    }
+
+    // MARK: - Auto-create Coordinator Agent
+
+    private func createCoordinatorAgent(for config: WorkspaceConfig) async {
+        do {
+            // 1. Get or start server
+            let serverInfo = try await serverManager.getOrStart(workspacePath: config.path)
+
+            // 2. Create OpenCode session
+            let client = OpenCodeClient(serverInfo: serverInfo)
+            let session = try await client.createSession(
+                directory: config.path,
+                title: "Coordinator"
+            )
+
+            // 3. Load coordinator specialist prompt
+            let loader = SpecialistLoader()
+            let specialists = await loader.loadSpecialists()
+            let coordinatorSpec = specialists.first { $0.id == "coordinator" }
+
+            // 4. Build agent metadata
+            let agentId = UUID().uuidString.lowercased()
+            let metadata = AgentMetadata(
+                agentId: agentId,
+                sessionId: session.id,
+                label: "Coordinator",
+                model: "opencode/claude-opus-4-6",
+                agent: nil,
+                specialistId: "coordinator",
+                systemPrompt: coordinatorSpec?.systemPrompt,
+                createdAt: ISO8601DateFormatter().string(from: Date())
+            )
+
+            // 5. Write agent JSON to disk
+            let agentsDir = "\(config.path)/.workspace/opencode/agents"
+            let fm = FileManager.default
+            if !fm.fileExists(atPath: agentsDir) {
+                try fm.createDirectory(atPath: agentsDir, withIntermediateDirectories: true)
+            }
+            let filePath = "\(agentsDir)/\(agentId).json"
+            let data = try JSONEncoder().encode(metadata)
+            try data.write(to: URL(fileURLWithPath: filePath))
+
+            // 6. Refresh agents list
+            viewModel.agentsForWorkspace[config.id] = nil
+            if let workspace = viewModel.workspaces.first(where: { $0.id == config.id }) {
+                await viewModel.loadAgents(for: workspace)
+            }
+
+            // 7. Select workspace and open chat tab
+            viewModel.selectedWorkspaceId = config.id
+            tabManager.openTab(TabItem(
+                title: "Coordinator",
+                icon: "bubble.left.fill",
+                contentType: .chat(agentId: agentId),
+                workspaceId: config.id
+            ))
+        } catch {
+            print("Failed to auto-create Coordinator agent: \(error)")
+        }
     }
 }
 
