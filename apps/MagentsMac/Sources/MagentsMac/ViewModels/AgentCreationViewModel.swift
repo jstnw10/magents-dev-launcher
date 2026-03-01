@@ -11,7 +11,7 @@ final class AgentCreationViewModel {
         didSet { applySpecialistDefaults() }
     }
     var label: String = ""
-    var model: String = ""
+    var model: String = "opencode/claude-opus-4-6"
     var isCreating = false
     var error: String?
 
@@ -85,7 +85,7 @@ final class AgentCreationViewModel {
     func reset() {
         selectedSpecialist = nil
         label = ""
-        model = ""
+        model = "opencode/claude-opus-4-6"
         error = nil
     }
 }

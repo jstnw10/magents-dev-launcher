@@ -59,10 +59,10 @@ struct CreateAgentSheet: View {
                             }
 
                             Picker("Model", selection: $viewModel.model) {
-                                Text("Default").tag("")
-                                Text("claude-sonnet-4").tag("claude-sonnet-4-20250514")
-                                Text("claude-opus-4").tag("claude-opus-4-20250514")
-                                Text("claude-haiku-4").tag("claude-haiku-4-20250514")
+                                Text("claude-opus-4.6 (Zen)").tag("opencode/claude-opus-4-6")
+                                Text("claude-sonnet-4").tag("opencode/claude-sonnet-4-20250514")
+                                Text("claude-opus-4").tag("opencode/claude-opus-4-20250514")
+                                Text("claude-haiku-4").tag("opencode/claude-haiku-4-20250514")
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)

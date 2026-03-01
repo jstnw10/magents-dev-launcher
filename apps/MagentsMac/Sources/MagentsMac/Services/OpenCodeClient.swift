@@ -114,7 +114,8 @@ struct OpenCodeClient: Sendable {
         request.timeoutInterval = 600 // 10 minutes — LLM responses can take a while
 
         let body: [String: Any] = [
-            "parts": [["type": "text", "text": text]]
+            "parts": [["type": "text", "text": text]],
+            "model": ["providerID": "opencode", "modelID": "claude-opus-4-6"]
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -141,7 +142,8 @@ struct OpenCodeClient: Sendable {
         request.timeoutInterval = 600 // 10 minutes
 
         let body: [String: Any] = [
-            "parts": [["type": "text", "text": text]]
+            "parts": [["type": "text", "text": text]],
+            "model": ["providerID": "opencode", "modelID": "claude-opus-4-6"]
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 

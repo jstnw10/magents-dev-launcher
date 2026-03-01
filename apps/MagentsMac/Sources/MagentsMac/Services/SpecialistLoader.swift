@@ -32,12 +32,12 @@ struct SpecialistLoader: Sendable {
     /// Hardcoded fallback specialists when no `.md` files are found on disk.
     private func defaultSpecialists() -> [SpecialistDefinition] {
         [
-            SpecialistDefinition(id: "developer", name: "Developer", description: "Plans then implements by itself", modelTier: "smart", roleReminder: nil, defaultModel: "claude-sonnet-4-20250514", systemPrompt: "", source: .builtin),
-            SpecialistDefinition(id: "implementor", name: "Implementor", description: "Executes implementation tasks, writes code", modelTier: "smart", roleReminder: nil, defaultModel: "claude-sonnet-4-20250514", systemPrompt: "", source: .builtin),
-            SpecialistDefinition(id: "coordinator", name: "Coordinator", description: "Plans work, breaks down tasks, coordinates sub-agents", modelTier: "smart", roleReminder: nil, defaultModel: "claude-sonnet-4-20250514", systemPrompt: "", source: .builtin),
-            SpecialistDefinition(id: "verifier", name: "Verifier", description: "Reviews work and verifies completeness", modelTier: "smart", roleReminder: nil, defaultModel: "claude-sonnet-4-20250514", systemPrompt: "", source: .builtin),
-            SpecialistDefinition(id: "pr-reviewer", name: "PR Reviewer", description: "Reviews pull requests with actionable feedback", modelTier: "smart", roleReminder: nil, defaultModel: "claude-sonnet-4-20250514", systemPrompt: "", source: .builtin),
-            SpecialistDefinition(id: "ui-designer", name: "UI Designer", description: "Creates elegant, accessible user interfaces", modelTier: "fast", roleReminder: nil, defaultModel: "claude-sonnet-4-20250514", systemPrompt: "", source: .builtin),
+            SpecialistDefinition(id: "developer", name: "Developer", description: "Plans then implements by itself", modelTier: "smart", roleReminder: nil, defaultModel: "opencode/claude-opus-4-6", systemPrompt: "", source: .builtin),
+            SpecialistDefinition(id: "implementor", name: "Implementor", description: "Executes implementation tasks, writes code", modelTier: "smart", roleReminder: nil, defaultModel: "opencode/claude-opus-4-6", systemPrompt: "", source: .builtin),
+            SpecialistDefinition(id: "coordinator", name: "Coordinator", description: "Plans work, breaks down tasks, coordinates sub-agents", modelTier: "smart", roleReminder: nil, defaultModel: "opencode/claude-opus-4-6", systemPrompt: "", source: .builtin),
+            SpecialistDefinition(id: "verifier", name: "Verifier", description: "Reviews work and verifies completeness", modelTier: "smart", roleReminder: nil, defaultModel: "opencode/claude-opus-4-6", systemPrompt: "", source: .builtin),
+            SpecialistDefinition(id: "pr-reviewer", name: "PR Reviewer", description: "Reviews pull requests with actionable feedback", modelTier: "smart", roleReminder: nil, defaultModel: "opencode/claude-opus-4-6", systemPrompt: "", source: .builtin),
+            SpecialistDefinition(id: "ui-designer", name: "UI Designer", description: "Creates elegant, accessible user interfaces", modelTier: "fast", roleReminder: nil, defaultModel: "opencode/claude-opus-4-6", systemPrompt: "", source: .builtin),
         ]
     }
 
