@@ -27,6 +27,9 @@ DerivedData
 *.xcuserstate
 project.xcworkspace
 
+# Swift Package Manager
+.build/
+
 # BUCK
 buck-out/
 \.buckd/
