@@ -106,7 +106,7 @@ struct OpenCodeClient: Sendable {
 
     // MARK: - Messaging
 
-    func sendPrompt(sessionId: String, text: String) async throws -> PromptResponse {
+    func sendPrompt(sessionId: String, text: String, systemPrompt: String? = nil) async throws -> PromptResponse {
         let url = baseURL.appendingPathComponent("session/\(sessionId)/message")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -114,7 +114,7 @@ struct OpenCodeClient: Sendable {
         request.timeoutInterval = 600 // 10 minutes — LLM responses can take a while
 
         let body: [String: Any] = [
-            "parts": [["type": "text", "text": text]],
+            "parts": Self.buildParts(text: text, systemPrompt: systemPrompt),
             "model": ["providerID": "opencode", "modelID": "claude-opus-4-6"]
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -134,7 +134,7 @@ struct OpenCodeClient: Sendable {
 
     /// Send a prompt without waiting for the full LLM response.
     /// The request is fired in a detached task; use SSE events to track the response in real-time.
-    func sendPromptFireAndForget(sessionId: String, text: String) async throws {
+    func sendPromptFireAndForget(sessionId: String, text: String, systemPrompt: String? = nil) async throws {
         let url = baseURL.appendingPathComponent("session/\(sessionId)/message")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -142,7 +142,7 @@ struct OpenCodeClient: Sendable {
         request.timeoutInterval = 600 // 10 minutes
 
         let body: [String: Any] = [
-            "parts": [["type": "text", "text": text]],
+            "parts": Self.buildParts(text: text, systemPrompt: systemPrompt),
             "model": ["providerID": "opencode", "modelID": "claude-opus-4-6"]
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -177,6 +177,17 @@ struct OpenCodeClient: Sendable {
     }
 
     // MARK: - Helpers
+
+    /// Builds the `parts` array for a message request.
+    /// When a systemPrompt is provided, it's sent as a synthetic text part before the user's message.
+    private static func buildParts(text: String, systemPrompt: String?) -> [[String: Any]] {
+        var parts: [[String: Any]] = []
+        if let prompt = systemPrompt, !prompt.isEmpty {
+            parts.append(["type": "text", "text": prompt, "synthetic": true])
+        }
+        parts.append(["type": "text", "text": text])
+        return parts
+    }
 
     private func validateResponse(_ response: URLResponse, data: Data? = nil) throws {
         guard let httpResponse = response as? HTTPURLResponse else {

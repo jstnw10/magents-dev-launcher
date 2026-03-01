@@ -31,14 +31,9 @@ final class ChatViewModel {
     let sessionId: String
     let workspacePath: String
 
-    /// The specialist prompt to inject on the first message, if any.
+    /// The system prompt to send as a synthetic part on every message, if any.
     private let systemPrompt: String?
-    /// The full agent metadata, used to persist the `hasReceivedFirstMessage` flag.
-    private var agentMetadata: AgentMetadata?
-    /// Whether the specialist prompt has already been injected for this agent.
-    private var hasInjectedSpecialistPrompt: Bool
 
-    private let fileManager = WorkspaceFileManager()
     private var assistantMessageId: String?
     private weak var workspaceViewModel: WorkspaceViewModel?
 
@@ -47,9 +42,13 @@ final class ChatViewModel {
         self.sessionId = sessionId
         self.workspacePath = workspacePath
         self.workspaceViewModel = workspaceViewModel
-        self.systemPrompt = agentMetadata?.systemPrompt
-        self.agentMetadata = agentMetadata
-        self.hasInjectedSpecialistPrompt = agentMetadata?.hasReceivedFirstMessage ?? false
+
+        // Use PromptTemplateManager to get the full prompt template with specialist role injected
+        if let agent = agentMetadata {
+            self.systemPrompt = PromptTemplateManager().getPrompt(for: agent, workspacePath: workspacePath)
+        } else {
+            self.systemPrompt = nil
+        }
     }
 
     // MARK: - Event Registration (Workspace-Level SSE)
@@ -268,25 +267,11 @@ final class ChatViewModel {
         assistantMessageId = nil
         error = nil
 
-        // Determine the text to send — prepend specialist prompt on first message
-        var textToSend = text
-        if !hasInjectedSpecialistPrompt,
-           let prompt = systemPrompt, !prompt.isEmpty {
-            textToSend = prompt + "\n\nThis is the user's request:\n\n" + text
-            hasInjectedSpecialistPrompt = true
-
-            // Persist the flag to disk so it survives app restarts
-            if var metadata = agentMetadata {
-                metadata.hasReceivedFirstMessage = true
-                agentMetadata = metadata
-                try? fileManager.updateAgentMetadata(metadata, workspacePath: workspacePath)
-            }
-        }
-
         do {
             let serverInfo = try await serverManager.getOrStart(workspacePath: workspacePath)
             let client = OpenCodeClient(serverInfo: serverInfo)
-            try await client.sendPromptFireAndForget(sessionId: sessionId, text: textToSend)
+            // Send systemPrompt as a synthetic part on every message (Intent/ACP pattern)
+            try await client.sendPromptFireAndForget(sessionId: sessionId, text: text, systemPrompt: systemPrompt)
             // Response will arrive via the persistent SSE connection
         } catch {
             self.error = error.localizedDescription
