@@ -145,17 +145,15 @@ final class ChatViewModel {
                             }
 
                         case "message.part.delta":
-                            // Only accumulate deltas for the assistant message
-                            let deltaMsgId = properties["messageID"] as? String
-                            if let assistantId = self.assistantMessageId,
-                               let deltaMsgId = deltaMsgId,
-                               deltaMsgId != assistantId {
-                                print("[ChatVM] SSE: skipping delta for non-assistant msgId=\(deltaMsgId)")
+                            // Only accumulate deltas once we've identified the assistant message
+                            guard let assistantId = self.assistantMessageId else {
+                                print("[ChatVM] SSE: skipping delta, no assistant message identified yet")
                                 break
                             }
-                            // If we don't have an assistant ID yet but role info says user, skip
-                            if role == "user" {
-                                print("[ChatVM] SSE: skipping user delta")
+                            // If this delta has a messageID, verify it matches the assistant
+                            if let deltaMsgId = properties["messageID"] as? String,
+                               deltaMsgId != assistantId {
+                                print("[ChatVM] SSE: skipping delta for non-assistant msgId=\(deltaMsgId)")
                                 break
                             }
                             if let delta = properties["delta"] as? String {
@@ -163,16 +161,15 @@ final class ChatViewModel {
                             }
 
                         case "message.part.updated":
-                            // Only accumulate for the assistant message
-                            let partMsgId = (properties["part"] as? [String: Any])?["messageID"] as? String
-                            if let assistantId = self.assistantMessageId,
-                               let partMsgId = partMsgId,
-                               partMsgId != assistantId {
-                                print("[ChatVM] SSE: skipping part.updated for non-assistant msgId=\(partMsgId)")
+                            // Only accumulate once we've identified the assistant message
+                            guard let assistantId = self.assistantMessageId else {
+                                print("[ChatVM] SSE: skipping part.updated, no assistant message identified yet")
                                 break
                             }
-                            if role == "user" {
-                                print("[ChatVM] SSE: skipping user part.updated")
+                            // If this part has a messageID, verify it matches the assistant
+                            if let partMsgId = (properties["part"] as? [String: Any])?["messageID"] as? String,
+                               partMsgId != assistantId {
+                                print("[ChatVM] SSE: skipping part.updated for non-assistant msgId=\(partMsgId)")
                                 break
                             }
                             if let part = properties["part"] as? [String: Any],

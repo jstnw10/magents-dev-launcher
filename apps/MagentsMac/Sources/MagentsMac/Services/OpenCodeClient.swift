@@ -19,9 +19,24 @@ struct PromptTokens: Codable, Sendable {
     let output: Int
 }
 
+struct ToolState: Codable, Sendable {
+    let status: String?
+    let input: AnyCodable?
+    let output: String?
+    let title: String?
+    let error: String?
+}
+
 struct PromptPart: Codable, Sendable {
+    let id: String?
+    let sessionID: String?
+    let messageID: String?
     let type: String
     let text: String?
+    // Tool-specific fields
+    let callID: String?
+    let tool: String?
+    let state: ToolState?
 }
 
 struct PromptResponse: Codable, Sendable {

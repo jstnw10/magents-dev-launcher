@@ -10,18 +10,52 @@ struct MessageTokens: Codable, Sendable {
     let output: Int
 }
 
-struct ConversationMessage: Codable, Identifiable, Sendable {
+// MARK: - Message Part Types
+
+enum MessagePartType: String, Codable, Sendable {
+    case text
+    case reasoning
+    case tool
+    case stepStart = "step-start"
+    case stepFinish = "step-finish"
+}
+
+enum ToolStatus: String, Codable, Sendable {
+    case pending
+    case running
+    case completed
+    case error
+}
+
+struct MessagePart: Identifiable, Sendable {
+    let id: String
+    let messageID: String
+    let type: MessagePartType
+
+    // Text / reasoning parts
+    var text: String?
+
+    // Tool parts
+    var toolName: String?
+    var toolCallID: String?
+    var toolStatus: ToolStatus?
+    var toolTitle: String?
+    var toolInput: String?
+    var toolOutput: String?
+}
+
+struct ConversationMessage: Identifiable, Sendable {
     var id: String { "\(role.rawValue)-\(timestamp)" }
 
     let role: MessageRole
     let content: String
-    let parts: [AnyCodable]
+    let parts: [MessagePart]
     let timestamp: String
     var tokens: MessageTokens?
     var cost: Double?
 }
 
-struct Conversation: Codable, Sendable {
+struct Conversation: Sendable {
     let agentId: String
     let sessionId: String
     var messages: [ConversationMessage]
