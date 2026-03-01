@@ -17,6 +17,7 @@ final class ChatViewModel {
     private let fileManager = WorkspaceFileManager()
     private var sseClient: SSEClient?
     private var streamingTask: Task<Void, Never>?
+    private var assistantMessageId: String?
 
     init(agentId: String, sessionId: String, workspacePath: String) {
         self.agentId = agentId
@@ -76,6 +77,7 @@ final class ChatViewModel {
         inputText = ""
         isLoading = true
         streamingText = ""
+        assistantMessageId = nil
         error = nil
 
         do {
@@ -113,14 +115,66 @@ final class ChatViewModel {
                         ?? (properties["part"] as? [String: Any])?["sessionID"] as? String
                     if let eventSid = eventSessionId, eventSid != sid { continue }
 
+                    // Extract message ID from event properties
+                    let msgId = properties["messageID"] as? String
+                        ?? (properties["info"] as? [String: Any])?["id"] as? String
+                        ?? (properties["part"] as? [String: Any])?["messageID"] as? String
+
+                    // Extract role from event properties
+                    let role = (properties["info"] as? [String: Any])?["role"] as? String
+
+                    print("[ChatVM] SSE: type=\(eventType) role=\(role ?? "nil") msgId=\(msgId ?? "nil")")
+
                     await MainActor.run {
                         switch eventType {
+                        case "message.updated":
+                            if let info = properties["info"] as? [String: Any],
+                               let messageRole = info["role"] as? String,
+                               let messageId = info["id"] as? String {
+                                if messageRole == "assistant" {
+                                    // Track the assistant message ID so we only accumulate its deltas
+                                    self.assistantMessageId = messageId
+                                    print("[ChatVM] SSE: tracking assistant messageId=\(messageId)")
+                                }
+                                // Check if assistant message is completed
+                                if messageRole == "assistant",
+                                   let time = info["time"] as? [String: Any],
+                                   time["completed"] != nil {
+                                    receivedResponse = true
+                                }
+                            }
+
                         case "message.part.delta":
+                            // Only accumulate deltas for the assistant message
+                            let deltaMsgId = properties["messageID"] as? String
+                            if let assistantId = self.assistantMessageId,
+                               let deltaMsgId = deltaMsgId,
+                               deltaMsgId != assistantId {
+                                print("[ChatVM] SSE: skipping delta for non-assistant msgId=\(deltaMsgId)")
+                                break
+                            }
+                            // If we don't have an assistant ID yet but role info says user, skip
+                            if role == "user" {
+                                print("[ChatVM] SSE: skipping user delta")
+                                break
+                            }
                             if let delta = properties["delta"] as? String {
                                 self.streamingText += delta
                             }
 
                         case "message.part.updated":
+                            // Only accumulate for the assistant message
+                            let partMsgId = (properties["part"] as? [String: Any])?["messageID"] as? String
+                            if let assistantId = self.assistantMessageId,
+                               let partMsgId = partMsgId,
+                               partMsgId != assistantId {
+                                print("[ChatVM] SSE: skipping part.updated for non-assistant msgId=\(partMsgId)")
+                                break
+                            }
+                            if role == "user" {
+                                print("[ChatVM] SSE: skipping user part.updated")
+                                break
+                            }
                             if let part = properties["part"] as? [String: Any],
                                part["type"] as? String == "text",
                                let text = part["text"] as? String,
@@ -132,14 +186,6 @@ final class ChatViewModel {
 
                         case "session.idle":
                             receivedResponse = true
-
-                        case "message.updated":
-                            if let info = properties["info"] as? [String: Any],
-                               info["role"] as? String == "assistant",
-                               let time = info["time"] as? [String: Any],
-                               time["completed"] != nil {
-                                receivedResponse = true
-                            }
 
                         case "server.heartbeat", "server.connected", "file.watcher.updated",
                              "session.updated", "session.diff", "session.status",
@@ -168,6 +214,7 @@ final class ChatViewModel {
                     )
                     self.messages.append(assistantMessage)
                     self.streamingText = ""
+                    self.assistantMessageId = nil
                     self.sseClient?.disconnect()
                     self.sseClient = nil
                     self.isLoading = false
@@ -190,6 +237,7 @@ final class ChatViewModel {
         sseClient?.disconnect()
         sseClient = nil
         streamingText = ""
+        assistantMessageId = nil
 
         do {
             let serverInfo = try await serverManager.getOrStart(workspacePath: workspacePath)
