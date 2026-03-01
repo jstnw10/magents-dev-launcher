@@ -4,11 +4,12 @@ struct ChatView: View {
     @Environment(ServerManager.self) private var serverManager
     @State private var viewModel: ChatViewModel
 
-    init(agentId: String, sessionId: String, workspacePath: String) {
+    init(agentId: String, sessionId: String, workspacePath: String, workspaceViewModel: WorkspaceViewModel) {
         _viewModel = State(initialValue: ChatViewModel(
             agentId: agentId,
             sessionId: sessionId,
-            workspacePath: workspacePath
+            workspacePath: workspacePath,
+            workspaceViewModel: workspaceViewModel
         ))
     }
 
@@ -24,11 +25,12 @@ struct ChatView: View {
                         }
 
                         // Show streaming response in real-time
-                        if !viewModel.streamingText.isEmpty {
+                        if !viewModel.streamingPartOrder.isEmpty {
+                            let streamingParts = viewModel.streamingPartOrder.compactMap { viewModel.streamingParts[$0] }
                             MessageBubbleView(message: ConversationMessage(
                                 role: .assistant,
                                 content: viewModel.streamingText,
-                                parts: [],
+                                parts: streamingParts,
                                 timestamp: ISO8601DateFormatter().string(from: Date()),
                                 tokens: nil,
                                 cost: nil
@@ -36,7 +38,7 @@ struct ChatView: View {
                             .id("streaming-message")
                         }
 
-                        if viewModel.isLoading && viewModel.streamingText.isEmpty {
+                        if viewModel.isLoading && viewModel.streamingPartOrder.isEmpty {
                             StreamingIndicator()
                                 .id("loading-indicator")
                         }
@@ -50,6 +52,9 @@ struct ChatView: View {
                     scrollToBottom(proxy: proxy)
                 }
                 .onChange(of: viewModel.streamingText) {
+                    scrollToBottom(proxy: proxy)
+                }
+                .onChange(of: viewModel.streamingPartOrder.count) {
                     scrollToBottom(proxy: proxy)
                 }
             }
@@ -82,6 +87,10 @@ struct ChatView: View {
         }
         .task {
             await viewModel.loadConversation(serverManager: serverManager)
+            viewModel.registerForEvents()
+        }
+        .onDisappear {
+            viewModel.unregisterForEvents()
         }
     }
 
@@ -137,7 +146,7 @@ struct ChatView: View {
 
     private func scrollToBottom(proxy: ScrollViewProxy) {
         withAnimation(.easeOut(duration: 0.2)) {
-            if !viewModel.streamingText.isEmpty {
+            if !viewModel.streamingPartOrder.isEmpty {
                 proxy.scrollTo("streaming-message", anchor: .bottom)
             } else if viewModel.isLoading {
                 proxy.scrollTo("loading-indicator", anchor: .bottom)

@@ -1,5 +1,11 @@
 import Foundation
 
+enum AgentStatus: String, Codable, Sendable {
+    case idle
+    case busy
+    case retry
+}
+
 struct AgentMetadata: Codable, Identifiable, Sendable {
     var id: String { agentId }
 
@@ -11,5 +17,6 @@ struct AgentMetadata: Codable, Identifiable, Sendable {
     var specialistId: String?
     var systemPrompt: String?
     var createdAt: String
+    var status: AgentStatus?
 }
 

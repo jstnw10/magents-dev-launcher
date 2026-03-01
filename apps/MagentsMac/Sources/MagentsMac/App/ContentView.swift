@@ -40,10 +40,12 @@ struct ContentView: View {
                let workspace = viewModel.workspaces.first(where: { $0.id == newId }) {
                 Task {
                     try? await serverManager.getOrStart(workspacePath: workspace.path)
+                    await viewModel.connectSSE(for: workspace, serverManager: serverManager)
                 }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            viewModel.disconnectAllSSE()
             serverManager.stopAll()
         }
     }
@@ -68,7 +70,8 @@ struct ContentView: View {
                 ChatView(
                     agentId: agentId,
                     sessionId: agent.sessionId,
-                    workspacePath: workspacePath
+                    workspacePath: workspacePath,
+                    workspaceViewModel: viewModel
                 )
             } else {
                 contentUnavailableView(

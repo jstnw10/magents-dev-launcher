@@ -7,6 +7,9 @@ struct AgentRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            // Status indicator
+            statusIndicator
+
             Image(systemName: "bubble.left.fill")
                 .foregroundStyle(.purple)
                 .frame(width: 20)
@@ -38,6 +41,24 @@ struct AgentRow: View {
                     await removeAgent()
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var statusIndicator: some View {
+        switch agent.status {
+        case .busy, .retry:
+            ProgressView()
+                .controlSize(.mini)
+                .frame(width: 8)
+        case .idle:
+            Circle()
+                .fill(.green)
+                .frame(width: 8, height: 8)
+        case .none:
+            Circle()
+                .fill(.secondary.opacity(0.3))
+                .frame(width: 8, height: 8)
         }
     }
 

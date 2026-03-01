@@ -16,13 +16,40 @@ struct MessageBubbleView: View {
                     .foregroundStyle(.secondary)
 
                 // Bubble
-                Text(message.content)
-                    .textSelection(.enabled)
+                if isUser || message.parts.isEmpty {
+                    // User messages or messages without parts: show plain content
+                    Text(message.content)
+                        .textSelection(.enabled)
+                        .padding(10)
+                        .background {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(isUser ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.1))
+                        }
+                } else {
+                    // Assistant messages with parts: render each part
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(message.parts) { part in
+                            switch part.type {
+                            case .text:
+                                if let text = part.text, !text.isEmpty {
+                                    Text(text)
+                                        .textSelection(.enabled)
+                                }
+                            case .reasoning:
+                                ReasoningView(part: part)
+                            case .tool:
+                                ToolCallView(part: part)
+                            case .stepStart, .stepFinish:
+                                EmptyView()
+                            }
+                        }
+                    }
                     .padding(10)
                     .background {
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(isUser ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.1))
+                            .fill(Color.secondary.opacity(0.1))
                     }
+                }
 
                 // Metadata row
                 if message.tokens != nil || message.cost != nil {
