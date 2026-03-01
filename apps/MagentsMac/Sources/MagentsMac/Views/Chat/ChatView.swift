@@ -86,6 +86,10 @@ struct ChatView: View {
         }
         .task {
             await viewModel.loadConversation(serverManager: serverManager)
+            await viewModel.connectSSE(serverManager: serverManager)
+        }
+        .onDisappear {
+            viewModel.disconnectSSE()
         }
     }
 
