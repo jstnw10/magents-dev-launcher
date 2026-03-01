@@ -87,9 +87,13 @@ final class ServerManager {
             throw error
         }
 
-        // 2. Allocate port
-        let port = nextPort
+        // 2. Allocate port — skip ports already in use
+        var port = nextPort
         nextPort += 1
+        while !isPortAvailable(port) {
+            port = nextPort
+            nextPort += 1
+        }
 
         // 3. Create data directory
         let dataDir = "\(workspacePath)/.workspace/opencode/data"
@@ -102,6 +106,7 @@ final class ServerManager {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: opencodePath)
         process.arguments = ["serve", "--hostname=127.0.0.1", "--port=\(port)"]
+        process.currentDirectoryURL = URL(fileURLWithPath: workspacePath)
 
         var env = ProcessInfo.processInfo.environment
         env["OPENCODE_CONFIG_DIR"] = dataDir
@@ -185,6 +190,26 @@ final class ServerManager {
 
     private nonisolated func isPIDAlive(_ pid: Int) -> Bool {
         kill(Int32(pid), 0) == 0
+    }
+
+    private nonisolated func isPortAvailable(_ port: Int) -> Bool {
+        let socketFD = socket(AF_INET, SOCK_STREAM, 0)
+        guard socketFD >= 0 else { return false }
+        defer { close(socketFD) }
+
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = in_port_t(port).bigEndian
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+
+        let result = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                Darwin.connect(socketFD, sockPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+
+        // If connect succeeds, port is in use; if it fails, port is available
+        return result != 0
     }
 
     private func findOpencodeBinary() async throws -> String {
