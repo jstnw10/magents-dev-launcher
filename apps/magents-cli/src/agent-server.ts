@@ -3,6 +3,8 @@ import path from "node:path";
 
 import { AgentManager, type AgentMetadata, type Conversation, type ConversationMessage } from "./agent-manager";
 import { OrchestrationError } from "./types";
+import { getPromptForAgent } from "./prompt-templates";
+import type { SpecialistRegistry } from "./specialist-registry";
 
 // --- Types ---
 
@@ -17,6 +19,7 @@ export interface AgentServerOptions {
   manager: AgentManager;
   openCodeUrl: string;
   port?: number;
+  specialistRegistry?: SpecialistRegistry;
 }
 
 /** Per-agent SSE subscription state */
@@ -103,6 +106,7 @@ export class AgentServer {
   private readonly manager: AgentManager;
   private readonly openCodeUrl: string;
   private readonly port: number;
+  private readonly specialistRegistry?: SpecialistRegistry;
   private server: ReturnType<typeof Bun.serve> | null = null;
   private sessions = new Map<string, SessionState>();
 
@@ -111,6 +115,7 @@ export class AgentServer {
     this.manager = options.manager;
     this.openCodeUrl = options.openCodeUrl.replace(/\/$/, "");
     this.port = options.port ?? DEFAULT_AGENT_SERVER_PORT;
+    this.specialistRegistry = options.specialistRegistry;
   }
 
   async start(): Promise<AgentServerInfo> {
@@ -209,16 +214,49 @@ export class AgentServer {
       }
     }
 
+    // GET /specialists — list available specialists
+    if (method === "GET" && pathname === "/specialists") {
+      if (!this.specialistRegistry) {
+        return jsonResponse({ specialists: [] });
+      }
+      try {
+        const specialists = await this.specialistRegistry.list();
+        return jsonResponse({
+          specialists: specialists.map((s) => ({
+            id: s.id,
+            name: s.name,
+            description: s.description,
+            defaultModel: s.defaultModel,
+            source: s.source,
+          })),
+        });
+      } catch (err) {
+        return errorResponse((err as Error).message, 500);
+      }
+    }
+
     // POST /agent — create agent
     if (method === "POST" && pathname === "/agent") {
       try {
         const body = await req.json() as { label: string; model?: string; specialistId?: string; systemPrompt?: string };
         if (!body.label) return errorResponse("Missing required field: label");
+
+        // Auto-resolve specialist prompt if specialistId is provided but systemPrompt is not
+        let systemPrompt = body.systemPrompt;
+        let model = body.model;
+        if (body.specialistId && !systemPrompt && this.specialistRegistry) {
+          const spec = await this.specialistRegistry.get(body.specialistId);
+          if (spec) {
+            systemPrompt = spec.systemPrompt;
+            model = model ?? spec.defaultModel;
+          }
+        }
+
         const metadata = await this.manager.createAgent(this.workspacePath, {
           label: body.label,
-          model: body.model,
+          model,
           specialistId: body.specialistId,
-          systemPrompt: body.systemPrompt,
+          systemPrompt,
         });
         return jsonResponse(metadata, 201);
       } catch (err) {
@@ -321,10 +359,11 @@ export class AgentServer {
 
     const metadata = await this.manager.getAgent(this.workspacePath, agentId);
 
-    // Build prompt parts with specialist injection
+    // Build prompt parts — wrap specialist prompt in task-loop template if present
     const parts: Array<{ type: string; text?: string; [key: string]: unknown }> = [];
     if (metadata.systemPrompt) {
-      parts.push({ type: "text", text: metadata.systemPrompt, synthetic: true });
+      const resolvedPrompt = getPromptForAgent(metadata.systemPrompt);
+      parts.push({ type: "text", text: resolvedPrompt, synthetic: true });
     }
     parts.push({ type: "text", text });
 

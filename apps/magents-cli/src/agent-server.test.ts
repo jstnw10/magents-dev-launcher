@@ -6,6 +6,115 @@ import { tmpdir } from "node:os";
 import { AgentServer, type AgentServerInfo } from "./agent-server";
 import { AgentManager, type OpenCodeClientInterface, type AgentMetadata } from "./agent-manager";
 
+// --- Mock OpenCode SSE Server ---
+
+/**
+ * Creates a mock OpenCode server that handles POST /session/:id/message
+ * and GET /event (SSE stream). Returns SSE events that simulate an assistant response.
+ */
+function createMockOpenCodeServer(options?: {
+  responseText?: string;
+  sessionId?: string;
+}): { server: ReturnType<typeof Bun.serve>; port: number; url: string; close: () => void } {
+  const responseText = options?.responseText ?? "Hello from the assistant!";
+  const expectedSessionId = options?.sessionId ?? "session-abc-123";
+  let sseController: ReadableStreamDefaultController<Uint8Array> | null = null;
+  let messagePosted = false;
+
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(req) {
+      const url = new URL(req.url);
+
+      // POST /session/:id/message — triggers SSE events
+      if (req.method === "POST" && url.pathname.match(/^\/session\/[^/]+\/message$/)) {
+        messagePosted = true;
+        // Send SSE events after a short delay
+        setTimeout(() => {
+          if (!sseController) return;
+          const encoder = new TextEncoder();
+          const msgId = "msg-asst-1";
+          const partId = "part-1";
+
+          // message.updated (start)
+          sseController.enqueue(encoder.encode(
+            `event: message.updated\ndata: ${JSON.stringify({
+              type: "message.updated",
+              properties: {
+                info: { id: msgId, role: "assistant", sessionID: expectedSessionId },
+              },
+            })}\n\n`,
+          ));
+
+          // message.part.delta
+          sseController.enqueue(encoder.encode(
+            `event: message.part.delta\ndata: ${JSON.stringify({
+              type: "message.part.delta",
+              properties: {
+                messageID: msgId,
+                partID: partId,
+                field: "text",
+                delta: responseText,
+              },
+            })}\n\n`,
+          ));
+
+          // message.updated (complete)
+          sseController.enqueue(encoder.encode(
+            `event: message.updated\ndata: ${JSON.stringify({
+              type: "message.updated",
+              properties: {
+                info: {
+                  id: msgId,
+                  role: "assistant",
+                  sessionID: expectedSessionId,
+                  time: { completed: Date.now() },
+                  tokens: { input: 10, output: 20 },
+                  cost: 0.001,
+                },
+              },
+            })}\n\n`,
+          ));
+        }, 50);
+
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      // GET /event — SSE stream
+      if (req.method === "GET" && url.pathname === "/event") {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            sseController = controller;
+          },
+          cancel() {
+            sseController = null;
+          },
+        });
+
+        return new Response(stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+          },
+        });
+      }
+
+      return new Response("Not found", { status: 404 });
+    },
+  });
+
+  return {
+    server,
+    port: server.port,
+    url: `http://127.0.0.1:${server.port}`,
+    close: () => server.stop(true),
+  };
+}
+
 // --- Mock Client ---
 
 function createMockClient(
@@ -262,6 +371,223 @@ describe("AgentServer", () => {
       expect(errorMsg).toContain("Unknown message type");
       ws.close();
     });
+  });
+
+  describe("WebSocket message flow", () => {
+    let mockOC: ReturnType<typeof createMockOpenCodeServer>;
+    let flowServer: AgentServer;
+    let flowPort: number;
+    let flowWorkspace: string;
+
+    beforeEach(async () => {
+      mockOC = createMockOpenCodeServer();
+      flowWorkspace = tmpWorkspace();
+      flowPort = randomPort();
+      const flowManager = new AgentManager({ client: createMockClient() });
+      flowServer = new AgentServer({
+        workspacePath: flowWorkspace,
+        manager: flowManager,
+        openCodeUrl: mockOC.url,
+        port: flowPort,
+      });
+      await flowServer.start();
+    });
+
+    afterEach(async () => {
+      await flowServer.stop();
+      mockOC.close();
+      await rm(flowWorkspace, { recursive: true, force: true });
+    });
+
+    it("sends message and receives response frames via WebSocket", async () => {
+      // Create agent
+      const createRes = await fetch(`http://127.0.0.1:${flowPort}/agent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: "ws-flow-test" }),
+      });
+      const created = await createRes.json() as AgentMetadata;
+
+      // Connect WebSocket
+      const ws = new WebSocket(`ws://127.0.0.1:${flowPort}/agent/${created.agentId}`);
+
+      const frames: Array<Record<string, unknown>> = [];
+      const done = new Promise<void>((resolve) => {
+        ws.onmessage = (event) => {
+          const data = JSON.parse(event.data as string);
+          frames.push(data);
+          if (data.type === "message.complete") {
+            resolve();
+          }
+        };
+        setTimeout(() => resolve(), 5000);
+      });
+
+      await new Promise<void>((resolve) => {
+        ws.onopen = () => resolve();
+        setTimeout(() => resolve(), 2000);
+      });
+
+      // Send message
+      ws.send(JSON.stringify({ type: "message", text: "Hello" }));
+
+      await done;
+      ws.close();
+
+      // Verify we received the expected frame types
+      const frameTypes = frames.map((f) => f.type);
+      expect(frameTypes).toContain("message.start");
+      expect(frameTypes).toContain("delta");
+      expect(frameTypes).toContain("message.complete");
+
+      // Verify delta contains the response text
+      const deltaFrame = frames.find((f) => f.type === "delta");
+      expect(deltaFrame?.delta).toBe("Hello from the assistant!");
+
+      // Verify message.complete has tokens/cost
+      const completeFrame = frames.find((f) => f.type === "message.complete");
+      expect(completeFrame?.tokens).toEqual({ input: 10, output: 20 });
+      expect(completeFrame?.cost).toBe(0.001);
+    }, 10_000);
+
+    it("writes conversation to disk after message completes", async () => {
+      // Create agent
+      const createRes = await fetch(`http://127.0.0.1:${flowPort}/agent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: "ws-conv-log-test" }),
+      });
+      const created = await createRes.json() as AgentMetadata;
+
+      // Connect WebSocket and send message
+      const ws = new WebSocket(`ws://127.0.0.1:${flowPort}/agent/${created.agentId}`);
+
+      const done = new Promise<void>((resolve) => {
+        ws.onmessage = (event) => {
+          const data = JSON.parse(event.data as string);
+          if (data.type === "message.complete") {
+            // Wait a bit for the async log to complete
+            setTimeout(() => resolve(), 200);
+          }
+        };
+        setTimeout(() => resolve(), 5000);
+      });
+
+      await new Promise<void>((resolve) => {
+        ws.onopen = () => resolve();
+        setTimeout(() => resolve(), 2000);
+      });
+
+      ws.send(JSON.stringify({ type: "message", text: "Test conversation logging" }));
+      await done;
+      ws.close();
+
+      // Verify conversation file was written
+      const convPath = path.join(flowWorkspace, ".workspace", "agents", `${created.agentId}.json`);
+      const convFile = Bun.file(convPath);
+      expect(await convFile.exists()).toBe(true);
+
+      const conv = await convFile.json();
+      expect(conv.id).toBe(created.agentId);
+      expect(conv.messages.length).toBe(2);
+      expect(conv.messages[0].role).toBe("user");
+      expect(conv.messages[0].contentBlocks[0].text).toBe("Test conversation logging");
+      expect(conv.messages[1].role).toBe("assistant");
+      expect(conv.messages[1].contentBlocks.length).toBeGreaterThan(0);
+    }, 10_000);
+
+    it("includes synthetic specialist prompt part when agent has systemPrompt", async () => {
+      // We need to capture what gets POSTed to the mock OpenCode server
+      let capturedBody: Record<string, unknown> | null = null;
+      const captureServer = Bun.serve({
+        port: 0,
+        hostname: "127.0.0.1",
+        async fetch(req) {
+          const url = new URL(req.url);
+          if (req.method === "POST" && url.pathname.match(/^\/session\/[^/]+\/message$/)) {
+            capturedBody = await req.json() as Record<string, unknown>;
+            return new Response(JSON.stringify({ ok: true }), {
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (req.method === "GET" && url.pathname === "/event") {
+            // Return an SSE stream that never sends events (we just need to capture the POST)
+            const stream = new ReadableStream<Uint8Array>({
+              start() {},
+            });
+            return new Response(stream, {
+              headers: { "Content-Type": "text/event-stream" },
+            });
+          }
+          return new Response("Not found", { status: 404 });
+        },
+      });
+
+      const captureWorkspace = tmpWorkspace();
+      const capturePort = randomPort();
+      const captureManager = new AgentManager({ client: createMockClient() });
+      const captureAgentServer = new AgentServer({
+        workspacePath: captureWorkspace,
+        manager: captureManager,
+        openCodeUrl: `http://127.0.0.1:${captureServer.port}`,
+        port: capturePort,
+      });
+      await captureAgentServer.start();
+
+      try {
+        // Create agent with systemPrompt
+        const createRes = await fetch(`http://127.0.0.1:${capturePort}/agent`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            label: "specialist-ws-test",
+            specialistId: "implementor",
+            systemPrompt: "You are an implementor specialist.",
+          }),
+        });
+        const created = await createRes.json() as AgentMetadata;
+
+        // Connect WebSocket
+        const ws = new WebSocket(`ws://127.0.0.1:${capturePort}/agent/${created.agentId}`);
+        await new Promise<void>((resolve) => {
+          ws.onopen = () => resolve();
+          setTimeout(() => resolve(), 2000);
+        });
+
+        // Send message
+        ws.send(JSON.stringify({ type: "message", text: "Do the task" }));
+
+        // Wait for the POST to be captured
+        await new Promise<void>((resolve) => {
+          const check = () => {
+            if (capturedBody) resolve();
+            else setTimeout(check, 50);
+          };
+          check();
+          setTimeout(() => resolve(), 3000);
+        });
+
+        ws.close();
+
+        // Verify the POST body includes the synthetic part
+        expect(capturedBody).not.toBeNull();
+        const parts = (capturedBody as Record<string, unknown>).parts as Array<Record<string, unknown>>;
+        expect(parts.length).toBe(2);
+
+        // First part should be synthetic with the specialist prompt wrapped in task-loop template
+        expect(parts[0]!.synthetic).toBe(true);
+        expect(typeof parts[0]!.text).toBe("string");
+        expect((parts[0]!.text as string)).toContain("You are an implementor specialist.");
+
+        // Second part should be the user message
+        expect(parts[1]!.text).toBe("Do the task");
+        expect(parts[1]!.synthetic).toBeUndefined();
+      } finally {
+        await captureAgentServer.stop();
+        captureServer.stop(true);
+        await rm(captureWorkspace, { recursive: true, force: true });
+      }
+    }, 10_000);
   });
 
   describe("specialist prompt injection", () => {

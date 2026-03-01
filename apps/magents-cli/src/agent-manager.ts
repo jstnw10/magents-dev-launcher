@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import { OrchestrationError } from "./types";
+import { generatePromptTemplates, getPromptForAgent } from "./prompt-templates";
 
 // --- Interfaces ---
 
@@ -151,6 +152,9 @@ export class AgentManager {
       `${JSON.stringify(metadata, null, 2)}\n`,
     );
 
+    // Generate prompt template files in .workspace/prompts/
+    await generatePromptTemplates(workspacePath);
+
     return metadata;
   }
 
@@ -222,10 +226,11 @@ export class AgentManager {
   ): Promise<ConversationMessage> {
     const metadata = await this.getAgent(workspacePath, agentId);
 
-    // Build prompt parts — inject specialist system prompt if present
+    // Build prompt parts — wrap specialist prompt in task-loop template if present
     const promptParts: Array<{ type: string; text?: string; [key: string]: unknown }> = [];
+    const resolvedPrompt = getPromptForAgent(metadata.systemPrompt);
     if (metadata.systemPrompt) {
-      promptParts.push({ type: "text", text: metadata.systemPrompt, synthetic: true });
+      promptParts.push({ type: "text", text: resolvedPrompt, synthetic: true });
     }
     promptParts.push({ type: "text", text });
 

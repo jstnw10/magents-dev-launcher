@@ -9,6 +9,7 @@ import {
   type AgentMetadata,
 } from "./agent-manager";
 import { OrchestrationError } from "./types";
+import { getPromptForAgent } from "./prompt-templates";
 
 function createMockClient(
   overrides?: Partial<OpenCodeClientInterface["session"]>,
@@ -340,11 +341,12 @@ describe("AgentManager", () => {
 
       await mgr.sendMessage(workspacePath, agent.agentId, "do the task");
 
+      const expectedPrompt = getPromptForAgent("You are a specialist. Follow these rules.");
       expect(capturedParams).toEqual({
         path: { id: "session-abc-123" },
         body: {
           parts: [
-            { type: "text", text: "You are a specialist. Follow these rules.", synthetic: true },
+            { type: "text", text: expectedPrompt, synthetic: true },
             { type: "text", text: "do the task" },
           ],
         },

@@ -400,6 +400,7 @@ export async function runCli(argv: string[], deps?: CliDependencies) {
             manager: mgr,
             openCodeUrl: serverInfo.url,
             port,
+            specialistRegistry,
           });
           const info = await agentServer.start();
           resolvedDeps.stdout(json(info));

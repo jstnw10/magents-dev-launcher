@@ -86,6 +86,46 @@ final class AgentManagerClient: NSObject, @unchecked Sendable {
 
     // MARK: - HTTP Endpoints
 
+    /// List available specialists from agent-manager.
+    func listSpecialists() async throws -> [SpecialistSummary] {
+        let url = baseURL.appendingPathComponent("specialists")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw AgentManagerClientError.httpError(statusCode: statusCode)
+        }
+
+        let result = try JSONDecoder().decode(SpecialistListResponse.self, from: data)
+        return result.specialists
+    }
+
+    /// Create an agent via agent-manager HTTP API.
+    /// Agent-manager auto-resolves specialist prompts from specialistId.
+    func createAgent(label: String, model: String?, specialistId: String?) async throws -> AgentMetadata {
+        let url = baseURL.appendingPathComponent("agent")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var body: [String: String] = ["label": label]
+        if let model { body["model"] = model }
+        if let specialistId { body["specialistId"] = specialistId }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw AgentManagerClientError.httpError(statusCode: statusCode)
+        }
+
+        return try JSONDecoder().decode(AgentMetadata.self, from: data)
+    }
+
     /// Load conversation history for an agent via HTTP.
     func getConversation(agentId: String) async throws -> AgentConversationResponse {
         let url = baseURL.appendingPathComponent("agent/\(agentId)/conversation")
@@ -184,6 +224,20 @@ enum AgentManagerFrame: @unchecked Sendable {
             return nil
         }
     }
+}
+
+// MARK: - Specialist Response (from GET /specialists)
+
+struct SpecialistListResponse: Codable, Sendable {
+    let specialists: [SpecialistSummary]
+}
+
+struct SpecialistSummary: Codable, Identifiable, Sendable, Hashable {
+    let id: String
+    let name: String
+    let description: String
+    let defaultModel: String?
+    let source: String
 }
 
 // MARK: - Conversation Response (from GET /agent/:id/conversation)
