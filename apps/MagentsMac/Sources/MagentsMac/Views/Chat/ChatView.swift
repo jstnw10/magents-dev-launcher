@@ -4,12 +4,13 @@ struct ChatView: View {
     @Environment(ServerManager.self) private var serverManager
     @State private var viewModel: ChatViewModel
 
-    init(agentId: String, sessionId: String, workspacePath: String, workspaceViewModel: WorkspaceViewModel) {
+    init(agentId: String, sessionId: String, workspacePath: String, workspaceViewModel: WorkspaceViewModel, agentMetadata: AgentMetadata? = nil) {
         _viewModel = State(initialValue: ChatViewModel(
             agentId: agentId,
             sessionId: sessionId,
             workspacePath: workspacePath,
-            workspaceViewModel: workspaceViewModel
+            workspaceViewModel: workspaceViewModel,
+            agentMetadata: agentMetadata
         ))
     }
 

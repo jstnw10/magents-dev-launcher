@@ -71,7 +71,8 @@ struct ContentView: View {
                     agentId: agentId,
                     sessionId: agent.sessionId,
                     workspacePath: workspacePath,
-                    workspaceViewModel: viewModel
+                    workspaceViewModel: viewModel,
+                    agentMetadata: agent
                 )
             } else {
                 contentUnavailableView(

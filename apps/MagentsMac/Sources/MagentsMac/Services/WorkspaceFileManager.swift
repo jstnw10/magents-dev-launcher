@@ -293,6 +293,18 @@ struct WorkspaceFileManager: Sendable {
         try? FileManager.default.removeItem(atPath: workspaceDir)
     }
 
+    // MARK: - Agent Metadata Persistence
+
+    /// Writes updated agent metadata back to disk.
+    func updateAgentMetadata(_ metadata: AgentMetadata, workspacePath: String) throws {
+        let agentsDir = "\(workspacePath)/.workspace/opencode/agents"
+        let filePath = "\(agentsDir)/\(metadata.agentId).json"
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(metadata)
+        try data.write(to: URL(fileURLWithPath: filePath))
+    }
+
     // MARK: - Note Parsing
 
     /// Parses a note `.md` file with YAML frontmatter.

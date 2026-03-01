@@ -16,6 +16,7 @@ struct AgentMetadata: Codable, Identifiable, Sendable {
     var agent: String?
     var specialistId: String?
     var systemPrompt: String?
+    var hasReceivedFirstMessage: Bool?
     var createdAt: String
     var status: AgentStatus?
 }
