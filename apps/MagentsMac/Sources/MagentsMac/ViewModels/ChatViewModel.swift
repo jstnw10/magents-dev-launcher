@@ -272,7 +272,7 @@ final class ChatViewModel {
         var textToSend = text
         if !hasInjectedSpecialistPrompt,
            let prompt = systemPrompt, !prompt.isEmpty {
-            textToSend = prompt + "\n\n" + text
+            textToSend = prompt + "\n\nThis is the user's request:\n\n" + text
             hasInjectedSpecialistPrompt = true
 
             // Persist the flag to disk so it survives app restarts
