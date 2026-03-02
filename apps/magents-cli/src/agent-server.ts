@@ -34,6 +34,7 @@ interface SessionState {
   userText: string | null;
   turnMessageCount: number;
   completedMessages: Array<{ id: string; contentBlocks: Array<Record<string, unknown>> }>;
+  systemPromptSent: boolean;
 }
 
 type ServerWebSocket = { data: unknown; send(data: string): void };
@@ -209,6 +210,7 @@ export class AgentServer {
             userText: null,
             turnMessageCount: 0,
             completedMessages: [],
+            systemPromptSent: false,
           });
         }
         const upgraded = server.upgrade(req, { data: { agentId } });
@@ -400,11 +402,12 @@ export class AgentServer {
 
     const metadata = await this.manager.getAgent(this.workspacePath, agentId);
 
-    // Build prompt parts — wrap specialist prompt in task-loop template if present
+    // Build prompt parts — only prepend system prompt on the first message of the session
     const parts: Array<{ type: string; text?: string; [key: string]: unknown }> = [];
-    if (metadata.systemPrompt) {
+    if (!session.systemPromptSent && metadata.systemPrompt) {
       const resolvedPrompt = getPromptForAgent(metadata.systemPrompt);
       parts.push({ type: "text", text: resolvedPrompt, synthetic: true });
+      session.systemPromptSent = true;
     }
     parts.push({ type: "text", text });
 
