@@ -34,6 +34,10 @@ final class ChatViewModel {
     private var assistantMessageId: String?
     private var agentManagerClient: AgentManagerClient?
     private var webSocketTask: Task<Void, Never>?
+    private var loadingTimeoutTask: Task<Void, Never>?
+
+    /// Timeout duration in seconds before loading state is cleared with an error.
+    private let loadingTimeoutSeconds: UInt64 = 60
 
     init(agentId: String, sessionId: String, workspacePath: String) {
         self.agentId = agentId
@@ -75,6 +79,7 @@ final class ChatViewModel {
 
     /// Disconnect the WebSocket.
     func disconnectWebSocket() {
+        cancelLoadingTimeout()
         webSocketTask?.cancel()
         webSocketTask = nil
         agentManagerClient?.disconnect()
@@ -82,11 +87,45 @@ final class ChatViewModel {
         print("[ChatVM] WebSocket disconnected for agent \(agentId)")
     }
 
+    // MARK: - Loading Timeout
+
+    /// Start (or restart) the loading timeout timer.
+    /// If no streaming activity arrives within `loadingTimeoutSeconds`, loading is cleared with an error.
+    private func startLoadingTimeout() {
+        cancelLoadingTimeout()
+        loadingTimeoutTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.sleep(nanoseconds: self.loadingTimeoutSeconds * 1_000_000_000)
+            } catch {
+                return // Task was cancelled
+            }
+            guard !Task.isCancelled else { return }
+            // Timeout fired — clear loading state and show error
+            if self.isLoading {
+                if !self.streamingParts.isEmpty {
+                    self.finalizeStreamingMessage()
+                }
+                self.isLoading = false
+                self.error = "No response received. The agent may be busy — try again."
+                print("[ChatVM] Loading timeout fired after \(self.loadingTimeoutSeconds)s for agent \(self.agentId)")
+            }
+        }
+    }
+
+    /// Cancel the loading timeout timer.
+    private func cancelLoadingTimeout() {
+        loadingTimeoutTask?.cancel()
+        loadingTimeoutTask = nil
+    }
+
     // MARK: - Handle WebSocket Frames
 
     private func handleFrame(_ frame: AgentManagerFrame) async {
         switch frame {
         case .messageStart(let messageId):
+            // Activity received — reset timeout
+            startLoadingTimeout()
             // If there's already a streaming message, finalize it first
             if !streamingParts.isEmpty {
                 finalizeStreamingMessage()
@@ -95,6 +134,8 @@ final class ChatViewModel {
             print("[ChatVM] WS: message.start messageId=\(messageId)")
 
         case .delta(let partId, let field, let delta):
+            // Activity received — reset timeout
+            startLoadingTimeout()
             guard let assistantId = self.assistantMessageId else { break }
             if var part = self.streamingParts[partId] {
                 if field == "text" {
@@ -113,6 +154,8 @@ final class ChatViewModel {
             }
 
         case .partUpdated(let partId, let partWrapper):
+            // Activity received — reset timeout
+            startLoadingTimeout()
             guard let assistantId = self.assistantMessageId else { break }
             let partDict = partWrapper.value
             let typeStr = partDict["type"] as? String ?? "text"
@@ -152,9 +195,11 @@ final class ChatViewModel {
             }
 
         case .messageComplete(_, _, _):
+            cancelLoadingTimeout()
             self.finalizeStreamingMessage()
 
         case .error(let message):
+            cancelLoadingTimeout()
             if !streamingParts.isEmpty {
                 finalizeStreamingMessage()
             }
@@ -162,6 +207,7 @@ final class ChatViewModel {
             self.isLoading = false
 
         case .idle:
+            cancelLoadingTimeout()
             if !streamingParts.isEmpty {
                 finalizeStreamingMessage()
             }
@@ -280,6 +326,9 @@ final class ChatViewModel {
         assistantMessageId = nil
         error = nil
 
+        // Start loading timeout
+        startLoadingTimeout()
+
         // Ensure WebSocket is connected
         if agentManagerClient == nil {
             await connectWebSocket(serverManager: serverManager)
@@ -306,10 +355,14 @@ final class ChatViewModel {
         )
         messages.append(userMessage)
         isLoading = true
-        streamingParts = [:]
-        streamingPartOrder = []
-        assistantMessageId = nil
+        // Do NOT clear streamingParts, streamingPartOrder, or assistantMessageId here.
+        // The existing streaming message (with the question tool) should remain visible
+        // while the answer is being processed. The natural streaming flow (handleFrame →
+        // finalizeStreamingMessage) will handle the transition when the server responds.
         error = nil
+
+        // Start loading timeout
+        startLoadingTimeout()
 
         if agentManagerClient == nil {
             await connectWebSocket(serverManager: serverManager)
@@ -321,6 +374,7 @@ final class ChatViewModel {
     // MARK: - Cancel Streaming
 
     func cancelStreaming() {
+        cancelLoadingTimeout()
         agentManagerClient?.sendCancel()
 
         if !streamingParts.isEmpty {
