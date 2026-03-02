@@ -3,6 +3,7 @@ import SwiftUI
 struct ChatView: View {
     @Environment(ServerManager.self) private var serverManager
     @Environment(ChatViewModelStore.self) private var store
+    @Environment(WorkspaceViewModel.self) private var workspaceViewModel
 
     let agentId: String
     let sessionId: String
@@ -142,12 +143,12 @@ struct ChatView: View {
                     if keyPress.modifiers.contains(.shift) {
                         return .ignored // let shift+enter insert newline
                     }
-                    Task { await viewModel.sendMessage(serverManager: serverManager) }
+                    Task { await viewModel.sendMessage(serverManager: serverManager, workspaceViewModel: workspaceViewModel) }
                     return .handled
                 }
 
             Button {
-                Task { await viewModel.sendMessage(serverManager: serverManager) }
+                Task { await viewModel.sendMessage(serverManager: serverManager, workspaceViewModel: workspaceViewModel) }
             } label: {
                 Image(systemName: "paperplane.fill")
                     .font(.title3)
