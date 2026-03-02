@@ -401,6 +401,11 @@ export class AgentServer {
       }
     }
 
+    // GET /health — health check with version info
+    if (method === "GET" && pathname === "/health") {
+      return jsonResponse({ status: "ok", version: 2, features: ["events"] });
+    }
+
     return errorResponse("Not found", 404);
   }
 

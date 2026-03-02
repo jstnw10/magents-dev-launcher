@@ -273,14 +273,20 @@ final class ServerManager {
     }
 
     private func isAgentManagerHealthy(url: String) async -> Bool {
-        guard let baseURL = URL(string: url)?.appendingPathComponent("agent") else { return false }
-        var request = URLRequest(url: baseURL)
+        guard let healthURL = URL(string: url)?.appendingPathComponent("health") else { return false }
+        var request = URLRequest(url: healthURL)
         request.timeoutInterval = 3
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse {
-                return httpResponse.statusCode == 200
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else { return false }
+            // Check that the server supports the events feature
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let features = json["features"] as? [String],
+               features.contains("events") {
+                return true
             }
+            // Server responded but doesn't support events — treat as stale
             return false
         } catch {
             return false
