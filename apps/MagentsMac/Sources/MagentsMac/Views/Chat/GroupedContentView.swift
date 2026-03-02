@@ -65,6 +65,7 @@ struct GroupedContentView: View {
                     .padding(.leading, 10)
                     .padding(.trailing, 4)
                 }
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 2)
                 .padding(.bottom, 4)
             }
