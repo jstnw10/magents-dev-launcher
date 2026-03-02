@@ -40,6 +40,12 @@ final class ChatViewModel {
     private var loadingTimeoutTask: Task<Void, Never>?
     private var hasReceivedStreamingEvents: Bool = false
 
+    /// Accumulated token counts across multiple `message.complete` events in a single turn.
+    private var accumulatedInputTokens: Int = 0
+    private var accumulatedOutputTokens: Int = 0
+    /// Accumulated cost across multiple `message.complete` events in a single turn.
+    private var accumulatedCost: Double = 0
+
     /// Timeout duration in seconds before loading state is cleared with an error.
     private let loadingTimeoutSeconds: UInt64 = 60
 
@@ -138,10 +144,8 @@ final class ChatViewModel {
             // Activity received — reset timeout
             hasReceivedStreamingEvents = true
             startLoadingTimeout()
-            // If there's already a streaming message, finalize it first
-            if !streamingParts.isEmpty {
-                finalizeStreamingMessage()
-            }
+            // Continue accumulating parts across message boundaries within the same turn.
+            // Do NOT finalize here — just update the message ID for new parts.
             self.assistantMessageId = messageId
             print("[ChatVM] WS: message.start messageId=\(messageId)")
 
@@ -208,9 +212,24 @@ final class ChatViewModel {
                 self.streamingPartOrder.append(partId)
             }
 
-        case .messageComplete(_, _, _):
+        case .messageComplete(_, let tokens, let cost):
             cancelLoadingTimeout()
-            self.finalizeStreamingMessage()
+            // Accumulate tokens and cost — do NOT finalize yet.
+            // The turn ends on `idle`, which is when we create the single ConversationMessage.
+            if let tokens = tokens {
+                if let input = tokens.value["input"] as? Int {
+                    accumulatedInputTokens += input
+                }
+                if let output = tokens.value["output"] as? Int {
+                    accumulatedOutputTokens += output
+                }
+            }
+            if let cost = cost {
+                accumulatedCost += cost
+            }
+            // Clear assistantMessageId so the next message.start can set a new one
+            self.assistantMessageId = nil
+            print("[ChatVM] WS: message.complete — accumulated tokens: in=\(accumulatedInputTokens) out=\(accumulatedOutputTokens), cost=\(accumulatedCost)")
 
         case .error(let message):
             print("[ChatVM] WS error frame: \(message)")
@@ -236,24 +255,83 @@ final class ChatViewModel {
     }
 
     /// Finalize the current streaming message into a completed ConversationMessage.
+    /// Uses accumulated tokens/cost from all `message.complete` events in the turn.
     private func finalizeStreamingMessage() {
         guard !streamingParts.isEmpty else { return }
         let finalParts = streamingPartOrder.compactMap { streamingParts[$0] }
         let finalText = streamingText.isEmpty ? "(No response received)" : streamingText
+
+        // Build tokens from accumulated values (nil if no tokens were received)
+        let tokens: MessageTokens? = (accumulatedInputTokens > 0 || accumulatedOutputTokens > 0)
+            ? MessageTokens(input: accumulatedInputTokens, output: accumulatedOutputTokens)
+            : nil
+        let cost: Double? = accumulatedCost > 0 ? accumulatedCost : nil
+
         let assistantMessage = ConversationMessage(
             id: UUID().uuidString,
             role: .assistant,
             content: finalText,
             parts: finalParts,
             timestamp: ISO8601DateFormatter().string(from: Date()),
-            tokens: nil,
-            cost: nil
+            tokens: tokens,
+            cost: cost
         )
         messages.append(assistantMessage)
         streamingParts = [:]
         streamingPartOrder = []
         assistantMessageId = nil
+        accumulatedInputTokens = 0
+        accumulatedOutputTokens = 0
+        accumulatedCost = 0
         isLoading = false
+    }
+
+    // MARK: - Merge Consecutive Assistant Messages
+
+    /// Merge consecutive assistant messages into a single ConversationMessage.
+    /// This handles historical conversations where multiple assistant messages
+    /// from the same turn were stored separately.
+    static func mergeConsecutiveAssistantMessages(_ messages: [ConversationMessage]) -> [ConversationMessage] {
+        var result: [ConversationMessage] = []
+        var pendingAssistant: ConversationMessage?
+
+        for msg in messages {
+            if msg.role == .assistant {
+                if var pending = pendingAssistant {
+                    // Merge into the pending assistant message
+                    let mergedContent = [pending.content, msg.content]
+                        .filter { !$0.isEmpty }
+                        .joined(separator: "\n")
+                    let mergedParts = pending.parts + msg.parts
+                    pending = ConversationMessage(
+                        id: pending.id,
+                        role: .assistant,
+                        content: mergedContent,
+                        parts: mergedParts,
+                        timestamp: pending.timestamp,
+                        tokens: nil,
+                        cost: nil
+                    )
+                    pendingAssistant = pending
+                } else {
+                    pendingAssistant = msg
+                }
+            } else {
+                // Non-assistant message — flush any pending assistant message first
+                if let pending = pendingAssistant {
+                    result.append(pending)
+                    pendingAssistant = nil
+                }
+                result.append(msg)
+            }
+        }
+
+        // Flush any remaining pending assistant message
+        if let pending = pendingAssistant {
+            result.append(pending)
+        }
+
+        return result
     }
 
     // MARK: - Load Conversation from Agent Manager
@@ -268,7 +346,8 @@ final class ChatViewModel {
             let client = AgentManagerClient(baseURL: baseURL)
             let conversation = try await client.getConversation(agentId: agentId)
 
-            messages = conversation.messages.compactMap { msg -> ConversationMessage? in
+            // Convert raw messages to ConversationMessages
+            let rawMessages = conversation.messages.compactMap { msg -> ConversationMessage? in
                 let role: MessageRole = msg.role == "user" ? .user : .assistant
                 let textContent = msg.contentBlocks
                     .filter { $0.type == "text" }
@@ -320,6 +399,9 @@ final class ChatViewModel {
                     cost: nil
                 )
             }
+
+            // Merge consecutive assistant messages into a single ConversationMessage
+            messages = Self.mergeConsecutiveAssistantMessages(rawMessages)
         } catch {
             print("[ChatVM] Failed to load conversation from agent-manager: \(error)")
             messages = []
@@ -347,6 +429,9 @@ final class ChatViewModel {
         streamingParts = [:]
         streamingPartOrder = []
         assistantMessageId = nil
+        accumulatedInputTokens = 0
+        accumulatedOutputTokens = 0
+        accumulatedCost = 0
         error = nil
         hasReceivedStreamingEvents = false
 
@@ -385,19 +470,26 @@ final class ChatViewModel {
 
         if !streamingParts.isEmpty {
             let finalParts = streamingPartOrder.compactMap { streamingParts[$0] }
+            let tokens: MessageTokens? = (accumulatedInputTokens > 0 || accumulatedOutputTokens > 0)
+                ? MessageTokens(input: accumulatedInputTokens, output: accumulatedOutputTokens)
+                : nil
+            let cost: Double? = accumulatedCost > 0 ? accumulatedCost : nil
             let assistantMessage = ConversationMessage(
                 id: UUID().uuidString,
                 role: .assistant,
                 content: streamingText,
                 parts: finalParts,
                 timestamp: ISO8601DateFormatter().string(from: Date()),
-                tokens: nil,
-                cost: nil
+                tokens: tokens,
+                cost: cost
             )
             messages.append(assistantMessage)
             streamingParts = [:]
             streamingPartOrder = []
         }
+        accumulatedInputTokens = 0
+        accumulatedOutputTokens = 0
+        accumulatedCost = 0
         isLoading = false
     }
 }
