@@ -128,14 +128,21 @@ final class WorkspaceViewModel {
             )
         }
 
-        reconnectAttempts[workspace.id] = 0
         print("[WorkspaceVM] WebSocket connected for workspace \(workspace.id) at \(wsURL)")
     }
 
     private func receiveWorkspaceEvents(wsTask: URLSessionWebSocketTask, workspaceId: String) async {
+        var didReceiveMessage = false
         while !Task.isCancelled {
             do {
                 let message = try await wsTask.receive()
+
+                // Reset backoff after first successful message
+                if !didReceiveMessage {
+                    didReceiveMessage = true
+                    reconnectAttempts[workspaceId] = 0
+                }
+
                 switch message {
                 case .string(let text):
                     await handleWorkspaceEvent(text, workspaceId: workspaceId)
@@ -176,6 +183,13 @@ final class WorkspaceViewModel {
         reconnectTasks[workspaceId]?.cancel()
 
         let attempts = reconnectAttempts[workspaceId] ?? 0
+
+        // Stop reconnecting after too many failures
+        if attempts >= 10 {
+            print("[WorkspaceVM] Max reconnect attempts (10) reached for \(workspaceId) — giving up")
+            return
+        }
+
         let delay = min(pow(2.0, Double(attempts)), 30.0)
         reconnectAttempts[workspaceId] = attempts + 1
         print("[WorkspaceVM] Scheduling reconnect for \(workspaceId) in \(delay)s (attempt \(attempts + 1))")
