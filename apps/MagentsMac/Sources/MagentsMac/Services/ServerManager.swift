@@ -252,8 +252,16 @@ final class ServerManager {
 
         // Check if server.json exists on disk (started externally)
         if let info = readAgentManagerInfo(workspacePath: workspacePath) {
-            agentManagerInfo[workspacePath] = info
-            return
+            // Verify the server is actually reachable before trusting stale info
+            if await isAgentManagerHealthy(url: info.url) {
+                agentManagerInfo[workspacePath] = info
+                return
+            } else {
+                // Stale server.json — clean up and start fresh
+                print("[ServerManager] Agent-manager at \(info.url) is not reachable — removing stale server.json")
+                let serverJsonPath = "\(workspacePath)/.workspace/agent-manager/server.json"
+                try? Foundation.FileManager.default.removeItem(atPath: serverJsonPath)
+            }
         }
 
         // Start agent-manager
@@ -261,6 +269,21 @@ final class ServerManager {
             try await startAgentManager(workspacePath: workspacePath, openCodeURL: openCodeURL)
         } catch {
             print("[ServerManager] Failed to start agent-manager: \(error)")
+        }
+    }
+
+    private func isAgentManagerHealthy(url: String) async -> Bool {
+        guard let baseURL = URL(string: url)?.appendingPathComponent("agent") else { return false }
+        var request = URLRequest(url: baseURL)
+        request.timeoutInterval = 3
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse {
+                return httpResponse.statusCode == 200
+            }
+            return false
+        } catch {
+            return false
         }
     }
 
