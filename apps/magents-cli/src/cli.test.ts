@@ -985,6 +985,84 @@ describe("CLI agent commands", () => {
     expect(result.running).toBe(false);
   });
 
+  it("agent manager-start with --opencode-url skips server.getOrStart", async () => {
+    let getOrStartCalled = false;
+    let createAgentServerCalled = false;
+    const base = setupTestCli();
+    const mockManager = new MockAgentManager();
+    const agentDeps: AgentDeps = {
+      server: {
+        async start(_workspacePath: string) {
+          return createMockServerInfo();
+        },
+        async stop(_workspacePath: string) {},
+        async status(_workspacePath: string) {
+          return { running: false };
+        },
+        async getOrStart(_workspacePath: string) {
+          getOrStartCalled = true;
+          return createMockServerInfo();
+        },
+      },
+      createManager(_serverUrl: string) {
+        return mockManager;
+      },
+      createAgentServer: () => ({
+        start: async () => {
+          createAgentServerCalled = true;
+          throw new Error("__TEST_STOP__");
+        },
+        stop: async () => {},
+      }),
+    };
+    const deps = { ...base.deps, agentDeps };
+
+    // createAgentServer.start() throws __TEST_STOP__ so runCli returns
+    // immediately instead of hanging forever — no Promise.race needed.
+    await runCli(["agent", "manager-start", "--opencode-url", "http://localhost:4096", "--port", "5555"], deps);
+
+    expect(getOrStartCalled).toBe(false);
+    expect(createAgentServerCalled).toBe(true);
+  });
+
+  it("agent manager-start without --opencode-url calls server.getOrStart", async () => {
+    let getOrStartCalled = false;
+    const base = setupTestCli();
+    const mockManager = new MockAgentManager();
+    const agentDeps: AgentDeps = {
+      server: {
+        async start(_workspacePath: string) {
+          return createMockServerInfo();
+        },
+        async stop(_workspacePath: string) {},
+        async status(_workspacePath: string) {
+          return { running: false };
+        },
+        async getOrStart(_workspacePath: string) {
+          getOrStartCalled = true;
+          return createMockServerInfo();
+        },
+      },
+      createManager(_serverUrl: string) {
+        return mockManager;
+      },
+      createAgentServer: () => ({
+        start: async () => {
+          throw new Error("__TEST_STOP__");
+        },
+        stop: async () => {},
+      }),
+    };
+    const deps = { ...base.deps, agentDeps };
+
+    // createAgentServer.start() throws __TEST_STOP__ so runCli returns
+    // immediately instead of hanging forever — no Promise.race needed.
+    await runCli(["agent", "manager-start", "--port", "5555"], deps);
+
+    expect(getOrStartCalled).toBe(true);
+  });
+
+
   it("agent create outputs metadata", async () => {
     const { deps, output, errors } = setupTestCliWithAgent();
 

@@ -2,15 +2,14 @@ import SwiftUI
 
 struct ChatView: View {
     @Environment(ServerManager.self) private var serverManager
-    @State private var viewModel: ChatViewModel
+    @Environment(ChatViewModelStore.self) private var store
 
-    init(agentId: String, sessionId: String, workspacePath: String, workspaceViewModel: WorkspaceViewModel) {
-        _viewModel = State(initialValue: ChatViewModel(
-            agentId: agentId,
-            sessionId: sessionId,
-            workspacePath: workspacePath,
-            workspaceViewModel: workspaceViewModel
-        ))
+    let agentId: String
+    let sessionId: String
+    let workspacePath: String
+
+    private var viewModel: ChatViewModel {
+        store.viewModel(agentId: agentId, sessionId: sessionId, workspacePath: workspacePath)
     }
 
     var body: some View {
@@ -20,21 +19,28 @@ struct ChatView: View {
                 ScrollView {
                     LazyVStack(spacing: 4) {
                         ForEach(viewModel.messages) { message in
-                            MessageBubbleView(message: message)
+                            MessageBubbleView(message: message, onQuestionAnswer: { answer in
+                                Task { await viewModel.submitQuestionAnswer(answer, serverManager: serverManager) }
+                            })
                                 .id(message.id)
                         }
 
                         // Show streaming response in real-time
                         if !viewModel.streamingPartOrder.isEmpty {
                             let streamingParts = viewModel.streamingPartOrder.compactMap { viewModel.streamingParts[$0] }
-                            MessageBubbleView(message: ConversationMessage(
-                                role: .assistant,
-                                content: viewModel.streamingText,
-                                parts: streamingParts,
-                                timestamp: ISO8601DateFormatter().string(from: Date()),
-                                tokens: nil,
-                                cost: nil
-                            ))
+                            MessageBubbleView(
+                                message: ConversationMessage(
+                                    role: .assistant,
+                                    content: viewModel.streamingText,
+                                    parts: streamingParts,
+                                    timestamp: ISO8601DateFormatter().string(from: Date()),
+                                    tokens: nil,
+                                    cost: nil
+                                ),
+                                onQuestionAnswer: { answer in
+                                    Task { await viewModel.submitQuestionAnswer(answer, serverManager: serverManager) }
+                                }
+                            )
                             .id("streaming-message")
                         }
 
@@ -87,10 +93,7 @@ struct ChatView: View {
         }
         .task {
             await viewModel.loadConversation(serverManager: serverManager)
-            viewModel.registerForEvents()
-        }
-        .onDisappear {
-            viewModel.unregisterForEvents()
+            await viewModel.connectWebSocket(serverManager: serverManager)
         }
     }
 
@@ -109,9 +112,11 @@ struct ChatView: View {
 
     // MARK: - Input Area
 
+    @ViewBuilder
     private var inputArea: some View {
+        @Bindable var vm = viewModel
         HStack(alignment: .bottom, spacing: 8) {
-            TextEditor(text: $viewModel.inputText)
+            TextEditor(text: $vm.inputText)
                 .font(.body)
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 36, maxHeight: 120)

@@ -14,7 +14,11 @@ export function createOpenCodeClient(serverUrl: string): OpenCodeClientInterface
         if (!res.ok) {
           throw new Error(`Failed to create session: ${res.status} ${await res.text()}`);
         }
-        const data = await res.json();
+        const data = (await res.json()) as {
+          id: string;
+          slug: string;
+          title: string;
+        };
         return { data };
       },
 
@@ -27,7 +31,21 @@ export function createOpenCodeClient(serverUrl: string): OpenCodeClientInterface
         if (!res.ok) {
           throw new Error(`Failed to send prompt: ${res.status} ${await res.text()}`);
         }
-        const data = await res.json();
+        const data = (await res.json()) as
+          | {
+              info: {
+                id: string;
+                role: string;
+                tokens?: { input: number; output: number };
+                cost?: number;
+              };
+              parts: Array<{
+                type: string;
+                text?: string;
+                [key: string]: unknown;
+              }>;
+            }
+          | undefined;
         return { data };
       },
 
@@ -36,7 +54,18 @@ export function createOpenCodeClient(serverUrl: string): OpenCodeClientInterface
         if (!res.ok) {
           throw new Error(`Failed to get messages: ${res.status} ${await res.text()}`);
         }
-        const data = await res.json();
+        const data = (await res.json()) as Array<{
+          info: {
+            id: string;
+            role: string;
+            time: { created: number };
+          };
+          parts: Array<{
+            type: string;
+            text?: string;
+            [key: string]: unknown;
+          }>;
+        }>;
         return { data };
       },
 

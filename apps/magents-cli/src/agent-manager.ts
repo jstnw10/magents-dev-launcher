@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import { OrchestrationError } from "./types";
+import { generatePromptTemplates, getPromptForAgent } from "./prompt-templates";
 
 // --- Interfaces ---
 
@@ -57,9 +58,11 @@ export interface AgentMetadata {
 }
 
 export interface ConversationMessage {
+  id?: string;
   role: "user" | "assistant";
   content: string;
   parts: unknown[];
+  contentBlocks?: unknown[];
   timestamp: string;
   tokens?: { input: number; output: number };
   cost?: number;
@@ -151,6 +154,9 @@ export class AgentManager {
       `${JSON.stringify(metadata, null, 2)}\n`,
     );
 
+    // Generate prompt template files in .workspace/prompts/
+    await generatePromptTemplates(workspacePath);
+
     return metadata;
   }
 
@@ -222,10 +228,18 @@ export class AgentManager {
   ): Promise<ConversationMessage> {
     const metadata = await this.getAgent(workspacePath, agentId);
 
+    // Build prompt parts — wrap specialist prompt in task-loop template if present
+    const promptParts: Array<{ type: string; text?: string; [key: string]: unknown }> = [];
+    const resolvedPrompt = getPromptForAgent(metadata.systemPrompt);
+    if (metadata.systemPrompt) {
+      promptParts.push({ type: "text", text: resolvedPrompt, synthetic: true });
+    }
+    promptParts.push({ type: "text", text });
+
     const result = await this.client.session.prompt({
       path: { id: metadata.sessionId },
       body: {
-        parts: [{ type: "text", text }],
+        parts: promptParts,
       },
     });
 
@@ -233,6 +247,7 @@ export class AgentManager {
 
     // Build user message
     const userMessage: ConversationMessage = {
+      id: `msg_user_${Date.now()}`,
       role: "user",
       content: text,
       parts: [{ type: "text", text }],
@@ -242,6 +257,7 @@ export class AgentManager {
     // Build assistant message
     const responseParts = result.data?.parts ?? [];
     const assistantMessage: ConversationMessage = {
+      id: result.data?.info.id ?? `msg_asst_${Date.now()}`,
       role: "assistant",
       content: extractTextContent(responseParts),
       parts: responseParts,

@@ -2,9 +2,20 @@ import SwiftUI
 
 struct ToolCallView: View {
     let part: MessagePart
+    /// Optional callback for answering interactive tools (e.g. question tool).
+    var onQuestionAnswer: ((String) -> Void)?
     @State private var isExpanded = false
 
     var body: some View {
+        // Interactive question tool
+        if part.toolName == "question" && part.toolStatus == .running,
+           let inputData = part.toolInputData,
+           let onAnswer = onQuestionAnswer {
+            QuestionToolView(inputData: inputData, onSubmit: onAnswer)
+        } else if part.toolName == "question" && part.toolStatus == .completed,
+                  let inputData = part.toolInputData {
+            CompletedQuestionView(inputData: inputData)
+        } else {
         VStack(alignment: .leading, spacing: 0) {
             // Header row: status icon + tool icon + display name + title
             Button {
@@ -65,6 +76,7 @@ struct ToolCallView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(Color.secondary.opacity(0.12), lineWidth: 0.5)
         }
+        } // end else (non-question tool)
     }
 
     // MARK: - Status Icon
@@ -105,6 +117,7 @@ struct ToolCallView: View {
         case "edit": return "Edit"
         case "write": return "Write"
         case "apply_patch": return "Patch"
+        case "question": return "Question"
         default: return name
         }
     }
@@ -118,6 +131,7 @@ struct ToolCallView: View {
         case "webfetch": return "globe"
         case "task": return "person.2"
         case "list": return "list.bullet"
+        case "question": return "questionmark.circle"
         default: return "wrench"
         }
     }
@@ -140,3 +154,61 @@ struct ToolCallView: View {
     }
 }
 
+
+
+/// Read-only view for a completed question tool, showing the questions and options.
+struct CompletedQuestionView: View {
+    let inputData: [String: Any]
+
+    private var questions: [[String: Any]] {
+        inputData["questions"] as? [[String: Any]] ?? []
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+                Image(systemName: "questionmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Question")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                Text("answered")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+
+            ForEach(Array(questions.enumerated()), id: \.offset) { _, question in
+                VStack(alignment: .leading, spacing: 4) {
+                    if let header = question["header"] as? String, !header.isEmpty {
+                        Text(header)
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let text = question["question"] as? String, !text.isEmpty {
+                        Text(text)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
+        }
+        .padding(.bottom, 6)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.secondary.opacity(0.06))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.12), lineWidth: 0.5)
+        }
+    }
+}

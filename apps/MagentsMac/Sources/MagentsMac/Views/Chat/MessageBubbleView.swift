@@ -2,6 +2,8 @@ import SwiftUI
 
 struct MessageBubbleView: View {
     let message: ConversationMessage
+    /// Optional callback for answering interactive question tools.
+    var onQuestionAnswer: ((String) -> Void)?
 
     var body: some View {
         let isUser = message.role == .user
@@ -38,7 +40,7 @@ struct MessageBubbleView: View {
                             case .reasoning:
                                 ReasoningView(part: part)
                             case .tool:
-                                ToolCallView(part: part)
+                                ToolCallView(part: part, onQuestionAnswer: onQuestionAnswer)
                             case .stepStart, .stepFinish:
                                 EmptyView()
                             }
