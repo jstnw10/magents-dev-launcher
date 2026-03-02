@@ -7,6 +7,7 @@ struct ChatView: View {
     let agentId: String
     let sessionId: String
     let workspacePath: String
+    var workspaceId: String?
 
     private var viewModel: ChatViewModel {
         store.viewModel(agentId: agentId, sessionId: sessionId, workspacePath: workspacePath)
@@ -86,6 +87,15 @@ struct ChatView: View {
                 }
                 .padding(8)
                 .background(Color.red.opacity(0.1))
+            }
+
+            // Sub-agent status bar
+            if !viewModel.subAgentTracker.activeSubAgents.isEmpty {
+                Divider()
+                SubAgentStatusBar(
+                    subAgents: viewModel.subAgentTracker.activeSubAgents,
+                    workspaceId: workspaceId
+                )
             }
 
             Divider()
