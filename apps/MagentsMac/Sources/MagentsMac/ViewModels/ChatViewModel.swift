@@ -87,6 +87,10 @@ final class ChatViewModel {
     private func handleFrame(_ frame: AgentManagerFrame) async {
         switch frame {
         case .messageStart(let messageId):
+            // If there's already a streaming message, finalize it first
+            if !streamingParts.isEmpty {
+                finalizeStreamingMessage()
+            }
             self.assistantMessageId = messageId
             print("[ChatVM] WS: message.start messageId=\(messageId)")
 

@@ -32,6 +32,8 @@ interface SessionState {
   websockets: Set<ServerWebSocket>;
   sseAbortController: AbortController | null;
   userText: string | null;
+  turnMessageCount: number;
+  completedMessages: Array<{ id: string; contentBlocks: Array<Record<string, unknown>> }>;
 }
 
 type ServerWebSocket = { data: unknown; send(data: string): void };
@@ -205,6 +207,8 @@ export class AgentServer {
             websockets: new Set(),
             sseAbortController: null,
             userText: null,
+            turnMessageCount: 0,
+            completedMessages: [],
           });
         }
         const upgraded = server.upgrade(req, { data: { agentId } });
@@ -405,10 +409,12 @@ export class AgentServer {
     // Store user text for logging when turn completes
     session.userText = text;
 
-    // Reset streaming state
+    // Reset streaming state for new turn
     session.assistantMessageId = null;
     session.streamingParts.clear();
     session.streamingPartOrder = [];
+    session.turnMessageCount = 0;
+    session.completedMessages = [];
 
     // Fire-and-forget POST to OpenCode
     const postUrl = `${this.openCodeUrl}/session/${session.sessionId}/message`;
@@ -530,6 +536,31 @@ export class AgentServer {
             });
             // DON'T disconnect SSE here — wait for session.status: idle
 
+            // Save completed message's content blocks
+            const contentBlocks = session.streamingPartOrder
+              .map((id) => session.streamingParts.get(id))
+              .filter(Boolean)
+              .map((part: any) => {
+                const block: Record<string, unknown> = { type: part.type, text: part.text };
+                if (part.type === "tool" || part.type === "tool_use" || part.type === "tool_result") {
+                  if (part.tool) block.name = part.tool;
+                  if (part.callID) block.tool_use_id = part.callID;
+                  if (part.state?.output) block.content = typeof part.state.output === 'string' ? part.state.output : JSON.stringify(part.state.output);
+                  if (part.state?.input) block.input = part.state.input;
+                  if (part.state?.title) block.title = part.state.title;
+                  if (part.state?.status) block.status = part.state.status;
+                }
+                return block;
+              });
+
+            session.completedMessages.push({ id: messageId, contentBlocks });
+            session.turnMessageCount++;
+
+            // Reset streaming state for next message in the same turn
+            session.assistantMessageId = null;
+            session.streamingParts = new Map();
+            session.streamingPartOrder = [];
+
             // Log conversation incrementally on each message complete
             if (session.userText) {
               this.logConversation(agentId, session).catch(() => {});
@@ -619,26 +650,52 @@ export class AgentServer {
     const userText = session.userText;
     if (!userText) return; // Nothing to log
 
-    // Build content blocks from accumulated streaming parts
-    const contentBlocks = session.streamingPartOrder
-      .map((id) => session.streamingParts.get(id))
-      .filter(Boolean)
-      .map((part: any) => {
-        const block: Record<string, unknown> = {
-          type: part.type,
-          text: part.text,
-        };
-        // Include tool metadata for tool parts
-        if (part.type === "tool" || part.type === "tool_use" || part.type === "tool_result") {
-          if (part.tool) block.name = part.tool;
-          if (part.callID) block.tool_use_id = part.callID;
-          if (part.state?.output) block.content = typeof part.state.output === 'string' ? part.state.output : JSON.stringify(part.state.output);
-          if (part.state?.input) block.input = part.state.input;
-          if (part.state?.title) block.title = part.state.title;
-          if (part.state?.status) block.status = part.state.status;
-        }
-        return block;
+    // Build messages array: user message + all completed assistant messages
+    const logMessages: Array<Record<string, unknown>> = [];
+
+    // User message
+    logMessages.push({
+      id: `msg_user_${Date.now()}`,
+      role: "user",
+      contentBlocks: [{ type: "text", text: userText }],
+      timestamp: now,
+    });
+
+    // All completed assistant messages in this turn
+    for (const completed of session.completedMessages) {
+      logMessages.push({
+        id: completed.id,
+        role: "assistant",
+        contentBlocks: completed.contentBlocks,
+        timestamp: now,
       });
+    }
+
+    // If there are currently streaming parts (not yet completed), add them too
+    if (session.streamingPartOrder.length > 0) {
+      const currentBlocks = session.streamingPartOrder
+        .map((id) => session.streamingParts.get(id))
+        .filter(Boolean)
+        .map((part: any) => {
+          const block: Record<string, unknown> = { type: part.type, text: part.text };
+          if (part.type === "tool" || part.type === "tool_use" || part.type === "tool_result") {
+            if (part.tool) block.name = part.tool;
+            if (part.callID) block.tool_use_id = part.callID;
+            if (part.state?.output) block.content = typeof part.state.output === 'string' ? part.state.output : JSON.stringify(part.state.output);
+            if (part.state?.input) block.input = part.state.input;
+            if (part.state?.title) block.title = part.state.title;
+            if (part.state?.status) block.status = part.state.status;
+          }
+          return block;
+        });
+
+      logMessages.push({
+        id: session.assistantMessageId ?? `msg_asst_${Date.now()}`,
+        role: "assistant",
+        contentBlocks: currentBlocks,
+        timestamp: now,
+      });
+    }
 
     // Load existing conversation log or create new
     const logPath = conversationLogPath(this.workspacePath, agentId);
@@ -684,26 +741,11 @@ export class AgentServer {
     );
 
     if (lastUserIdx >= 0) {
-      // Remove the previous snapshot of this turn (user + assistant)
+      // Remove the previous snapshot of this turn (user + all assistant messages)
       conversationLog.messages = conversationLog.messages.slice(0, lastUserIdx);
     }
 
-    // Add current turn snapshot
-    const userMessage = {
-      id: `msg_user_${Date.now()}`,
-      role: "user" as const,
-      contentBlocks: [{ type: "text", text: userText }],
-      timestamp: now,
-    };
-
-    const assistantMessage = {
-      id: session.assistantMessageId ?? `msg_asst_${Date.now()}`,
-      role: "assistant" as const,
-      contentBlocks,
-      timestamp: now,
-    };
-
-    conversationLog.messages.push(userMessage, assistantMessage);
+    conversationLog.messages.push(...logMessages);
 
     const dir = path.dirname(logPath);
     await mkdir(dir, { recursive: true });
