@@ -382,6 +382,7 @@ final class ChatViewModel {
         streamingPartOrder = []
         assistantMessageId = nil
         error = nil
+        hasReceivedStreamingEvents = false
 
         // Start loading timeout
         startLoadingTimeout()
