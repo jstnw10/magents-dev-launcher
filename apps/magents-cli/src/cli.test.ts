@@ -985,6 +985,73 @@ describe("CLI agent commands", () => {
     expect(result.running).toBe(false);
   });
 
+  it("agent manager-start with --opencode-url skips server.getOrStart", async () => {
+    let getOrStartCalled = false;
+    const base = setupTestCli();
+    const mockManager = new MockAgentManager();
+    const agentDeps: AgentDeps = {
+      server: {
+        async start(_workspacePath: string) {
+          return createMockServerInfo();
+        },
+        async stop(_workspacePath: string) {},
+        async status(_workspacePath: string) {
+          return { running: false };
+        },
+        async getOrStart(_workspacePath: string) {
+          getOrStartCalled = true;
+          return createMockServerInfo();
+        },
+      },
+      createManager(_serverUrl: string) {
+        return mockManager;
+      },
+    };
+    const deps = { ...base.deps, agentDeps };
+
+    // manager-start hangs forever with `await new Promise(() => {})`,
+    // so race it with a short timeout — we only need to verify getOrStart was not called.
+    await Promise.race([
+      runCli(["agent", "manager-start", "--opencode-url", "http://localhost:4096", "--port", "5555"], deps),
+      new Promise((resolve) => setTimeout(resolve, 200)),
+    ]);
+
+    expect(getOrStartCalled).toBe(false);
+  });
+
+  it("agent manager-start without --opencode-url calls server.getOrStart", async () => {
+    let getOrStartCalled = false;
+    const base = setupTestCli();
+    const mockManager = new MockAgentManager();
+    const agentDeps: AgentDeps = {
+      server: {
+        async start(_workspacePath: string) {
+          return createMockServerInfo();
+        },
+        async stop(_workspacePath: string) {},
+        async status(_workspacePath: string) {
+          return { running: false };
+        },
+        async getOrStart(_workspacePath: string) {
+          getOrStartCalled = true;
+          return createMockServerInfo();
+        },
+      },
+      createManager(_serverUrl: string) {
+        return mockManager;
+      },
+    };
+    const deps = { ...base.deps, agentDeps };
+
+    await Promise.race([
+      runCli(["agent", "manager-start", "--port", "5555"], deps),
+      new Promise((resolve) => setTimeout(resolve, 200)),
+    ]);
+
+    expect(getOrStartCalled).toBe(true);
+  });
+
+
   it("agent create outputs metadata", async () => {
     const { deps, output, errors } = setupTestCliWithAgent();
 

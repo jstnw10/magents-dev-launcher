@@ -261,6 +261,7 @@ final class ServerManager {
             "run", cliPath,
             "agent", "manager-start",
             "--workspace-path", workspacePath,
+            "--opencode-url", openCodeURL,
             "--port", String(port)
         ]
         process.currentDirectoryURL = URL(fileURLWithPath: workspacePath)
@@ -272,6 +273,13 @@ final class ServerManager {
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
+
+        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if let str = String(data: data, encoding: .utf8), !str.isEmpty {
+                print("[agent-manager stderr] \(str)")
+            }
+        }
 
         try process.run()
 
@@ -301,6 +309,13 @@ final class ServerManager {
                 return info
             }
             if !process.isRunning {
+                // Read stderr for diagnostics
+                if let stderrPipe = process.standardError as? Pipe {
+                    let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                    if let stderrStr = String(data: stderrData, encoding: .utf8), !stderrStr.isEmpty {
+                        print("[agent-manager] Process exited early. stderr: \(stderrStr)")
+                    }
+                }
                 throw ServerManagerError.agentManagerStartFailed
             }
         }
