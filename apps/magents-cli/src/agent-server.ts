@@ -367,7 +367,7 @@ export class AgentServer {
     const agentId = (ws.data as { agentId: string }).agentId;
     const text = typeof message === "string" ? message : message.toString();
 
-    let parsed: { type: string; text?: string };
+    let parsed: { type: string; text?: string; requestID?: string; answers?: string[][] };
     try {
       parsed = JSON.parse(text);
     } catch {
@@ -386,6 +386,44 @@ export class AgentServer {
 
     if (parsed.type === "message" && parsed.text) {
       await this.handleUserMessage(agentId, parsed.text);
+      return;
+    }
+
+    if (parsed.type === "question.reply" && parsed.requestID && parsed.answers) {
+      try {
+        const url = `${this.openCodeUrl}/question/${parsed.requestID}/reply`;
+        console.log(`[AgentServer] Question reply: POST ${url}`);
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ answers: parsed.answers }),
+        });
+        if (!res.ok) {
+          console.log(`[AgentServer] Question reply failed: ${res.status}`);
+          this.broadcastToAgent(agentId, { type: "error", message: `Question reply failed: ${res.status}` });
+        }
+      } catch (err) {
+        console.log(`[AgentServer] Question reply error: ${(err as Error).message}`);
+        this.broadcastToAgent(agentId, { type: "error", message: `Question reply error: ${(err as Error).message}` });
+      }
+      return;
+    }
+
+    if (parsed.type === "question.reject" && parsed.requestID) {
+      try {
+        const url = `${this.openCodeUrl}/question/${parsed.requestID}/reject`;
+        console.log(`[AgentServer] Question reject: POST ${url}`);
+        const res = await fetch(url, {
+          method: "POST",
+        });
+        if (!res.ok) {
+          console.log(`[AgentServer] Question reject failed: ${res.status}`);
+          this.broadcastToAgent(agentId, { type: "error", message: `Question reject failed: ${res.status}` });
+        }
+      } catch (err) {
+        console.log(`[AgentServer] Question reject error: ${(err as Error).message}`);
+        this.broadcastToAgent(agentId, { type: "error", message: `Question reject error: ${(err as Error).message}` });
+      }
       return;
     }
 
@@ -718,6 +756,17 @@ export class AgentServer {
 
           this.broadcastToAgent(agentId, { type: "part.updated", partId, part: partDict });
         }
+        break;
+      }
+
+      case "question.asked": {
+        const request = properties as { id: string; sessionID: string; questions: unknown[] };
+        this.broadcastToAgent(agentId, {
+          type: "question.asked",
+          requestID: request.id,
+          sessionID: request.sessionID,
+          questions: request.questions,
+        });
         break;
       }
 
