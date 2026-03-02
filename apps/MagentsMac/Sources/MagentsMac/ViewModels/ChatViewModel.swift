@@ -108,7 +108,7 @@ final class ChatViewModel {
                 }
                 self.isLoading = false
                 self.error = "No response received. The agent may be busy — try again."
-                print("[ChatVM] Loading timeout fired after \(self.loadingTimeoutSeconds)s for agent \(self.agentId)")
+                print("[ChatVM] ⚠️ Loading timeout fired after \(self.loadingTimeoutSeconds)s — no streaming events received for agent \(self.agentId)")
             }
         }
     }
@@ -199,6 +199,7 @@ final class ChatViewModel {
             self.finalizeStreamingMessage()
 
         case .error(let message):
+            print("[ChatVM] WS error frame: \(message)")
             cancelLoadingTimeout()
             if !streamingParts.isEmpty {
                 finalizeStreamingMessage()
@@ -207,6 +208,7 @@ final class ChatViewModel {
             self.isLoading = false
 
         case .idle:
+            print("[ChatVM] WS: idle received")
             cancelLoadingTimeout()
             if !streamingParts.isEmpty {
                 finalizeStreamingMessage()
@@ -344,6 +346,7 @@ final class ChatViewModel {
     /// This sends the answer as a regular user message through the WebSocket.
     func submitQuestionAnswer(_ answer: String, serverManager: ServerManager) async {
         guard !answer.isEmpty else { return }
+        print("[ChatVM] Submitting question answer: \(answer.prefix(50))...")
 
         let userMessage = ConversationMessage(
             role: .user,

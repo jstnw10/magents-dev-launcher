@@ -396,6 +396,8 @@ export class AgentServer {
     const session = this.sessions.get(agentId);
     if (!session) return;
 
+    console.log(`[AgentServer] handleUserMessage agentId=${agentId} sessionId=${session.sessionId}`);
+
     const metadata = await this.manager.getAgent(this.workspacePath, agentId);
 
     // Build prompt parts — wrap specialist prompt in task-loop template if present
@@ -420,10 +422,12 @@ export class AgentServer {
     await this.persistUserMessage(agentId, text);
 
     // Subscribe to SSE BEFORE the POST so we don't miss early events
+    console.log(`[AgentServer] Subscribing to SSE before POST...`);
     this.ensureSSESubscription(agentId, session);
 
     // POST message to OpenCode and check response
     const postUrl = `${this.openCodeUrl}/session/${session.sessionId}/message`;
+    console.log(`[AgentServer] POST ${postUrl}`);
     try {
       const res = await fetch(postUrl, {
         method: "POST",
@@ -434,13 +438,16 @@ export class AgentServer {
       if (!res.ok) {
         const statusText = res.statusText || `HTTP ${res.status}`;
         const isBusy = res.status === 409 || res.status === 429;
+        console.log(`[AgentServer] POST failed: ${res.status} ${statusText} (busy=${isBusy})`);
         const errorMessage = isBusy
           ? `Session is busy — please wait for the current response to finish (${statusText})`
           : `Failed to send message: ${statusText}`;
         this.broadcastToAgent(agentId, { type: "error", message: errorMessage });
         return;
       }
+      console.log(`[AgentServer] POST response: ${res.status} ${res.statusText}`);
     } catch (err) {
+      console.log(`[AgentServer] POST network error: ${(err as Error).message}`);
       this.broadcastToAgent(agentId, {
         type: "error",
         message: `Failed to send message to OpenCode: ${(err as Error).message}`,
@@ -457,6 +464,7 @@ export class AgentServer {
    * removing this entry when the full turn is logged.
    */
   private async persistUserMessage(agentId: string, text: string): Promise<void> {
+    console.log(`[AgentServer] Persisting user message for ${agentId}`);
     const now = new Date().toISOString();
     const logPath = conversationLogPath(this.workspacePath, agentId);
 
@@ -511,12 +519,16 @@ export class AgentServer {
   // --- SSE Subscription ---
 
   private ensureSSESubscription(agentId: string, session: SessionState): void {
-    if (session.sseAbortController) return; // Already subscribed
+    if (session.sseAbortController) {
+      console.log(`[AgentServer] SSE already subscribed for ${agentId}`);
+      return;
+    }
 
     const controller = new AbortController();
     session.sseAbortController = controller;
 
     const sseUrl = `${this.openCodeUrl}/event`;
+    console.log(`[AgentServer] SSE subscribing to ${sseUrl} for ${agentId}`);
 
     (async () => {
       try {
@@ -526,10 +538,12 @@ export class AgentServer {
         });
 
         if (!res.ok || !res.body) {
+          console.log(`[AgentServer] SSE connection failed: ${res.status}`);
           this.broadcastToAgent(agentId, { type: "error", message: `SSE connection failed: ${res.status}` });
           return;
         }
 
+        console.log(`[AgentServer] SSE connected for ${agentId}`);
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -546,8 +560,11 @@ export class AgentServer {
             this.handleSSEEvent(agentId, session, event);
           }
         }
+
+        console.log(`[AgentServer] SSE stream ended for ${agentId}`);
       } catch (err) {
         if ((err as Error).name !== "AbortError") {
+          console.log(`[AgentServer] SSE error for ${agentId}: ${(err as Error).message}`);
           this.broadcastToAgent(agentId, { type: "error", message: `SSE error: ${(err as Error).message}` });
         }
       } finally {
@@ -581,7 +598,12 @@ export class AgentServer {
       ((properties.info as Record<string, unknown>)?.sessionID as string) ??
       ((properties.part as Record<string, unknown>)?.sessionID as string);
 
-    if (eventSessionId && eventSessionId !== session.sessionId) return;
+    console.log(`[AgentServer] SSE event: ${eventType} sessionId=${eventSessionId ?? 'none'}`);
+
+    if (eventSessionId && eventSessionId !== session.sessionId) {
+      console.log(`[AgentServer] SSE event filtered: eventSessionId=${eventSessionId} !== ${session.sessionId}`);
+      return;
+    }
 
     switch (eventType) {
       case "message.updated": {
@@ -830,6 +852,7 @@ export class AgentServer {
   private broadcastToAgent(agentId: string, frame: Record<string, unknown>): void {
     const session = this.sessions.get(agentId);
     if (!session) return;
+    console.log(`[AgentServer] Broadcasting ${frame.type} to ${agentId}`);
     const data = JSON.stringify(frame);
     for (const ws of session.websockets) {
       try {
