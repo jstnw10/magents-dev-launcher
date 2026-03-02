@@ -38,10 +38,18 @@ struct MarkdownTextView: View {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             EmptyView()
-        } else if let attributed = try? AttributedString(
+        } else if var attributed = try? AttributedString(
             markdown: trimmed,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
+            let _ = {
+                for run in attributed.runs {
+                    if let intent = run.inlinePresentationIntent, intent.contains(.code) {
+                        attributed[run.range].backgroundColor = .gray.opacity(0.2)
+                        attributed[run.range].font = .system(size: 13, design: .monospaced)
+                    }
+                }
+            }()
             Text(attributed)
                 .font(.body)
         } else {
@@ -147,10 +155,18 @@ struct MarkdownTextView: View {
     @ViewBuilder
     private func inlineMarkdownText(_ content: String) -> some View {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let attributed = try? AttributedString(
+        if var attributed = try? AttributedString(
             markdown: trimmed,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
+            let _ = {
+                for run in attributed.runs {
+                    if let intent = run.inlinePresentationIntent, intent.contains(.code) {
+                        attributed[run.range].backgroundColor = .gray.opacity(0.2)
+                        attributed[run.range].font = .system(size: 13, design: .monospaced)
+                    }
+                }
+            }()
             Text(attributed)
         } else {
             Text(trimmed)
@@ -192,7 +208,7 @@ struct MarkdownTextView: View {
                     .padding(.bottom, 10)
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(Color.black.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
