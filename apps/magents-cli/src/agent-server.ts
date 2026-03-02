@@ -308,7 +308,47 @@ export class AgentServer {
       const agentId = extractAgentIdFromPath(pathname)!;
       try {
         const conversation = await this.manager.getConversation(this.workspacePath, agentId);
-        return jsonResponse(conversation);
+        const metadata = await this.manager.getAgent(this.workspacePath, agentId);
+
+        // Also check for conversation log written by agent-server (new format)
+        const logPath = conversationLogPath(this.workspacePath, agentId);
+        const logFile = Bun.file(logPath);
+        let serverLog: { id: string; metadata: Record<string, unknown>; messages: Array<Record<string, unknown>> } | null = null;
+        try {
+          if (await logFile.exists()) {
+            serverLog = await logFile.json();
+          }
+        } catch {
+          // Ignore parse errors
+        }
+
+        // Prefer server log messages (new format with contentBlocks), fall back to manager conversation (old format with parts)
+        const sourceMessages = serverLog?.messages ?? conversation.messages;
+
+        // Transform to the format the Swift client expects
+        const response = {
+          id: agentId,
+          metadata: {
+            label: metadata.label,
+            specialistId: metadata.specialistId,
+            model: metadata.model,
+          },
+          messages: sourceMessages.map((msg: any, index: number) => ({
+            id: msg.id ?? `msg_${index}`,
+            role: msg.role,
+            contentBlocks: msg.contentBlocks ?? msg.parts?.map((p: any) => ({
+              type: p.type ?? "text",
+              text: p.text,
+              name: p.name,
+              input: p.input,
+              content: p.content,
+              tool_use_id: p.tool_use_id,
+            })) ?? [{ type: "text", text: msg.content ?? "" }],
+            timestamp: msg.timestamp,
+          })),
+        };
+
+        return jsonResponse(response);
       } catch (err) {
         if (err instanceof OrchestrationError && err.code === "AGENT_NOT_FOUND") {
           return errorResponse(`Agent not found: ${agentId}`, 404);

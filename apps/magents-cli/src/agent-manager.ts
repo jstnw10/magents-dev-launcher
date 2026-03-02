@@ -58,9 +58,11 @@ export interface AgentMetadata {
 }
 
 export interface ConversationMessage {
+  id?: string;
   role: "user" | "assistant";
   content: string;
   parts: unknown[];
+  contentBlocks?: unknown[];
   timestamp: string;
   tokens?: { input: number; output: number };
   cost?: number;
@@ -245,6 +247,7 @@ export class AgentManager {
 
     // Build user message
     const userMessage: ConversationMessage = {
+      id: `msg_user_${Date.now()}`,
       role: "user",
       content: text,
       parts: [{ type: "text", text }],
@@ -254,6 +257,7 @@ export class AgentManager {
     // Build assistant message
     const responseParts = result.data?.parts ?? [];
     const assistantMessage: ConversationMessage = {
+      id: result.data?.info.id ?? `msg_asst_${Date.now()}`,
       role: "assistant",
       content: extractTextContent(responseParts),
       parts: responseParts,

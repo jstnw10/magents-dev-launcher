@@ -290,8 +290,9 @@ describe("AgentServer", () => {
 
       const res = await fetch(`http://127.0.0.1:${port}/agent/${created.agentId}/conversation`);
       expect(res.status).toBe(200);
-      const data = await res.json() as { agentId: string; messages: unknown[] };
-      expect(data.agentId).toBe(created.agentId);
+      const data = await res.json() as { id: string; metadata: { label: string }; messages: unknown[] };
+      expect(data.id).toBe(created.agentId);
+      expect(data.metadata.label).toBe("conv-test");
       expect(data.messages).toEqual([]);
     });
 

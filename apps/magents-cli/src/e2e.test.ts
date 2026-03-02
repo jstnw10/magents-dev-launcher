@@ -298,9 +298,8 @@ describe.skipIf(SKIP_E2E || !opencodeAvailable)("E2E: AgentServer integration", 
     // 5. Verify conversation via GET endpoint
     const convRes = await fetch(`${baseUrl}/agent/${agent.agentId}/conversation`);
     expect(convRes.status).toBe(200);
-    const conv = await convRes.json() as { agentId: string; messages: unknown[] };
-    expect(conv.agentId).toBe(agent.agentId);
-    // Conversation should be empty via the manager endpoint (it uses the opencode path, not agent-server log)
-    // The agent-server logs to .workspace/agents/ separately
+    const conv = await convRes.json() as { id: string; metadata: { label: string }; messages: unknown[] };
+    expect(conv.id).toBe(agent.agentId);
+    // Response now includes metadata and transforms messages to Swift-compatible format
   }, 90_000);
 }, 180_000);
