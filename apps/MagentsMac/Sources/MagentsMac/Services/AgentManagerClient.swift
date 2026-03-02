@@ -270,6 +270,8 @@ struct AgentContentBlock: Codable, Sendable {
     let input: AnyCodable?
     let content: String?
     let tool_use_id: String?
+    let title: String?
+    let status: String?
 }
 
 // MARK: - Errors

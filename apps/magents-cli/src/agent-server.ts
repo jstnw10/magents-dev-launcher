@@ -31,6 +31,7 @@ interface SessionState {
   streamingPartOrder: string[];
   websockets: Set<ServerWebSocket>;
   sseAbortController: AbortController | null;
+  userText: string | null;
 }
 
 type ServerWebSocket = { data: unknown; send(data: string): void };
@@ -199,6 +200,7 @@ export class AgentServer {
             streamingPartOrder: [],
             websockets: new Set(),
             sseAbortController: null,
+            userText: null,
           });
         }
         const upgraded = server.upgrade(req, { data: { agentId } });
@@ -396,6 +398,9 @@ export class AgentServer {
     }
     parts.push({ type: "text", text });
 
+    // Store user text for logging when turn completes
+    session.userText = text;
+
     // Reset streaming state
     session.assistantMessageId = null;
     session.streamingParts.clear();
@@ -417,12 +422,12 @@ export class AgentServer {
     }
 
     // Subscribe to SSE if not already subscribed
-    this.ensureSSESubscription(agentId, session, text);
+    this.ensureSSESubscription(agentId, session);
   }
 
   // --- SSE Subscription ---
 
-  private ensureSSESubscription(agentId: string, session: SessionState, userText: string): void {
+  private ensureSSESubscription(agentId: string, session: SessionState): void {
     if (session.sseAbortController) return; // Already subscribed
 
     const controller = new AbortController();
@@ -455,7 +460,7 @@ export class AgentServer {
           buffer = remainder;
 
           for (const event of events) {
-            this.handleSSEEvent(agentId, session, event, userText);
+            this.handleSSEEvent(agentId, session, event);
           }
         }
       } catch (err) {
@@ -476,7 +481,6 @@ export class AgentServer {
     agentId: string,
     session: SessionState,
     event: { event?: string; data: string },
-    userText: string,
   ): void {
     let json: Record<string, unknown>;
     try {
@@ -520,13 +524,7 @@ export class AgentServer {
               tokens,
               cost,
             });
-
-            // Log conversation
-            this.logConversation(agentId, session, userText).catch(() => {});
-
-            // Disconnect SSE after message complete
-            session.sseAbortController?.abort();
-            session.sseAbortController = null;
+            // DON'T disconnect SSE here — wait for session.status: idle
           }
         }
         break;
@@ -568,10 +566,13 @@ export class AgentServer {
 
         const partId = partDict.id as string;
         if (partId) {
-          // Update accumulated part
+          // Update accumulated part — copy all known fields
           const part = session.streamingParts.get(partId) ?? { id: partId, type: "text" };
           if (partDict.text !== undefined) part.text = partDict.text as string;
           if (partDict.type !== undefined) part.type = partDict.type as string;
+          if (partDict.tool !== undefined) part.tool = partDict.tool;
+          if (partDict.callID !== undefined) part.callID = partDict.callID;
+          if (partDict.state !== undefined) part.state = partDict.state;
           session.streamingParts.set(partId, part);
           if (!session.streamingPartOrder.includes(partId)) {
             session.streamingPartOrder.push(partId);
@@ -585,7 +586,17 @@ export class AgentServer {
       case "session.status": {
         const status = properties.status as Record<string, unknown> | undefined;
         if (status?.type === "idle") {
+          // Log conversation now that the full turn is complete
+          if (session.userText) {
+            this.logConversation(agentId, session, session.userText).catch(() => {});
+            session.userText = null;
+          }
+
           this.broadcastToAgent(agentId, { type: "idle" });
+
+          // Disconnect SSE — turn is fully done
+          session.sseAbortController?.abort();
+          session.sseAbortController = null;
         }
         break;
       }
@@ -600,7 +611,23 @@ export class AgentServer {
     // Build content blocks from accumulated streaming parts
     const contentBlocks = session.streamingPartOrder
       .map((id) => session.streamingParts.get(id))
-      .filter(Boolean) as Array<{ id: string; type: string; text?: string; [key: string]: unknown }>;
+      .filter(Boolean)
+      .map((part: any) => {
+        const block: Record<string, unknown> = {
+          type: part.type,
+          text: part.text,
+        };
+        // Include tool metadata for tool parts
+        if (part.type === "tool" || part.type === "tool_use" || part.type === "tool_result") {
+          if (part.tool) block.name = part.tool;
+          if (part.callID) block.tool_use_id = part.callID;
+          if (part.state?.output) block.content = typeof part.state.output === 'string' ? part.state.output : JSON.stringify(part.state.output);
+          if (part.state?.input) block.input = part.state.input;
+          if (part.state?.title) block.title = part.state.title;
+          if (part.state?.status) block.status = part.state.status;
+        }
+        return block;
+      });
 
     const userMessage = {
       id: `msg_user_${Date.now()}`,

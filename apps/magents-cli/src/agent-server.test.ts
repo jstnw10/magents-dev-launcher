@@ -76,6 +76,17 @@ function createMockOpenCodeServer(options?: {
               },
             })}\n\n`,
           ));
+
+          // session.status: idle — signals the full turn is done
+          sseController.enqueue(encoder.encode(
+            `event: session.status\ndata: ${JSON.stringify({
+              type: "session.status",
+              properties: {
+                sessionID: expectedSessionId,
+                status: { type: "idle" },
+              },
+            })}\n\n`,
+          ));
         }, 50);
 
         return new Response(JSON.stringify({ ok: true }), {
@@ -466,7 +477,7 @@ describe("AgentServer", () => {
       const done = new Promise<void>((resolve) => {
         ws.onmessage = (event) => {
           const data = JSON.parse(event.data as string);
-          if (data.type === "message.complete") {
+          if (data.type === "idle") {
             // Wait a bit for the async log to complete
             setTimeout(() => resolve(), 200);
           }

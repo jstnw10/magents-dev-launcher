@@ -202,12 +202,30 @@ final class ChatViewModel {
 
                 let messageParts = msg.contentBlocks.enumerated().compactMap { (index, block) -> MessagePart? in
                     guard let partType = MessagePartType(rawValue: block.type) else { return nil }
-                    return MessagePart(
+                    var part = MessagePart(
                         id: "\(msg.id)-\(index)",
                         messageID: msg.id,
                         type: partType,
                         text: block.text
                     )
+
+                    // Restore tool-specific metadata if present
+                    if partType == .tool {
+                        part.toolName = block.name
+                        part.toolCallID = block.tool_use_id
+                        if let statusStr = block.status {
+                            part.toolStatus = ToolStatus(rawValue: statusStr)
+                        } else {
+                            part.toolStatus = .completed
+                        }
+                        part.toolTitle = block.title
+                        part.toolOutput = block.content
+                        if let input = block.input {
+                            part.toolInput = stringifyJSON(input.value)
+                        }
+                    }
+
+                    return part
                 }
 
                 let hasToolParts = messageParts.contains { $0.type == .tool }
