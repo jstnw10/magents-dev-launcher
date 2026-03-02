@@ -196,6 +196,7 @@ struct MessageBubbleView: View {
                                     requestID: requestID,
                                     onQuestionAnswer: onQuestionAnswer
                                 )
+                                .padding(.bottom, 12)
                             }
                         }
                     }
