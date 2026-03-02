@@ -7,6 +7,45 @@ struct MessageBubbleView: View {
     /// Optional callback for answering interactive question tools.
     var onQuestionAnswer: ((String, [[String]]) -> Void)?
 
+    /// Pre-processed display items computed from message parts, grouping content
+    /// between stepStart/stepFinish into collapsible sections.
+    private var displayItems: [DisplayItem] {
+        var items: [DisplayItem] = []
+        var i = 0
+        let parts = message.parts
+
+        while i < parts.count {
+            let part = parts[i]
+            if part.type == .stepStart {
+                let groupName = part.text ?? "Group"
+                var groupParts: [MessagePart] = []
+                var isClosed = false
+                i += 1
+                while i < parts.count {
+                    if parts[i].type == .stepFinish {
+                        isClosed = true
+                        i += 1
+                        break
+                    }
+                    if parts[i].type == .stepStart {
+                        // Nested group start — don't consume, let outer loop handle
+                        break
+                    }
+                    groupParts.append(parts[i])
+                    i += 1
+                }
+                items.append(.group(name: groupName, parts: groupParts, isClosed: isClosed))
+            } else if part.type == .stepFinish {
+                // Orphan stepFinish — skip
+                i += 1
+            } else {
+                items.append(.single(part: part))
+                i += 1
+            }
+        }
+        return items
+    }
+
     var body: some View {
         let isUser = message.role == .user
 
@@ -36,20 +75,31 @@ struct MessageBubbleView: View {
                             .fill(isUser ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.1))
                     }
                 } else {
-                    // Assistant messages with parts: render each part
+                    // Assistant messages with parts: render each part or group
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(message.parts) { part in
-                            switch part.type {
-                            case .text:
-                                if let text = part.text, !text.isEmpty {
-                                    MarkdownTextView(text: text)
+                        ForEach(Array(displayItems.enumerated()), id: \.offset) { _, item in
+                            switch item {
+                            case .single(let part):
+                                switch part.type {
+                                case .text:
+                                    if let text = part.text, !text.isEmpty {
+                                        MarkdownTextView(text: text)
+                                    }
+                                case .reasoning:
+                                    ReasoningView(part: part)
+                                case .tool:
+                                    ToolCallView(part: part, requestID: requestID, onQuestionAnswer: onQuestionAnswer)
+                                case .stepStart, .stepFinish:
+                                    EmptyView()
                                 }
-                            case .reasoning:
-                                ReasoningView(part: part)
-                            case .tool:
-                                ToolCallView(part: part, requestID: requestID, onQuestionAnswer: onQuestionAnswer)
-                            case .stepStart, .stepFinish:
-                                EmptyView()
+                            case .group(let name, let parts, let isClosed):
+                                GroupedContentView(
+                                    groupName: name,
+                                    parts: parts,
+                                    isClosed: isClosed,
+                                    requestID: requestID,
+                                    onQuestionAnswer: onQuestionAnswer
+                                )
                             }
                         }
                     }
@@ -100,3 +150,11 @@ struct MessageBubbleView: View {
     }
 }
 
+
+// MARK: - Display Item
+
+/// Represents either a single message part or a group of parts between stepStart/stepFinish.
+private enum DisplayItem {
+    case single(part: MessagePart)
+    case group(name: String, parts: [MessagePart], isClosed: Bool)
+}
