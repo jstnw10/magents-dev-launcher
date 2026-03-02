@@ -44,6 +44,10 @@ final class ChatViewModel {
     private var subAgentPollTask: Task<Void, Never>?
     private var hasReceivedStreamingEvents: Bool = false
 
+    /// Weak references for auto-starting sub-agent tracking from handleFrame.
+    private weak var lastServerManager: ServerManager?
+    private weak var lastWorkspaceViewModel: WorkspaceViewModel?
+
     /// Accumulated token counts across multiple `message.complete` events in a single turn.
     private var accumulatedInputTokens: Int = 0
     private var accumulatedOutputTokens: Int = 0
@@ -153,6 +157,14 @@ final class ChatViewModel {
             // Do NOT finalize here — just update the message ID for new parts.
             self.assistantMessageId = messageId
             print("[ChatVM] WS: message.start messageId=\(messageId)")
+
+            // Auto-start sub-agent tracking if not already active.
+            // This handles navigating to an already-busy agent or an idle agent that becomes busy.
+            if !subAgentTracker.isTracking, let sm = lastServerManager, let wvm = lastWorkspaceViewModel {
+                let currentAgents = wvm.agentsForWorkspace.values.flatMap { $0 }
+                subAgentTracker.startTracking(parentAgentId: agentId, currentAgents: Array(currentAgents))
+                startSubAgentPolling(serverManager: sm, workspaceViewModel: wvm)
+            }
 
         case .delta(let partId, let field, let delta):
             // Activity received — reset timeout
@@ -446,6 +458,8 @@ final class ChatViewModel {
             let currentAgents = workspaceViewModel.agentsForWorkspace.values.flatMap { $0 }
             subAgentTracker.startTracking(parentAgentId: agentId, currentAgents: Array(currentAgents))
             startSubAgentPolling(serverManager: serverManager, workspaceViewModel: workspaceViewModel)
+            self.lastServerManager = serverManager
+            self.lastWorkspaceViewModel = workspaceViewModel
         }
 
         // Start loading timeout
@@ -512,6 +526,21 @@ final class ChatViewModel {
     private func stopSubAgentPolling() {
         subAgentPollTask?.cancel()
         subAgentPollTask = nil
+    }
+
+    /// Start sub-agent tracking for an already-active agent.
+    /// Call this when navigating to a conversation where the agent may already be busy.
+    func startSubAgentTrackingIfNeeded(serverManager: ServerManager, workspaceViewModel: WorkspaceViewModel) {
+        // Store references so handleFrame can auto-start tracking on messageStart
+        self.lastServerManager = serverManager
+        self.lastWorkspaceViewModel = workspaceViewModel
+
+        // Don't start polling if already tracking
+        guard !subAgentTracker.isTracking else { return }
+
+        let currentAgents = workspaceViewModel.agentsForWorkspace.values.flatMap { $0 }
+        subAgentTracker.startTracking(parentAgentId: agentId, currentAgents: Array(currentAgents))
+        startSubAgentPolling(serverManager: serverManager, workspaceViewModel: workspaceViewModel)
     }
 
     // MARK: - Cancel Streaming

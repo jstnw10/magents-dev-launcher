@@ -107,6 +107,7 @@ struct ChatView: View {
         .task {
             await viewModel.loadConversation(serverManager: serverManager)
             await viewModel.connectWebSocket(serverManager: serverManager)
+            viewModel.startSubAgentTrackingIfNeeded(serverManager: serverManager, workspaceViewModel: workspaceViewModel)
         }
     }
 
