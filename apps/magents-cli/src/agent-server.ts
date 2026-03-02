@@ -146,6 +146,10 @@ export class AgentServer {
           const session = self.sessions.get(agentId);
           if (session) {
             session.websockets.delete(ws as unknown as ServerWebSocket);
+            // Save conversation when last client disconnects
+            if (session.websockets.size === 0 && session.streamingPartOrder.length > 0) {
+              self.logConversation(agentId, session).catch(() => {});
+            }
           }
         },
       },
@@ -525,6 +529,11 @@ export class AgentServer {
               cost,
             });
             // DON'T disconnect SSE here — wait for session.status: idle
+
+            // Log conversation incrementally on each message complete
+            if (session.userText) {
+              this.logConversation(agentId, session).catch(() => {});
+            }
           }
         }
         break;
@@ -588,7 +597,7 @@ export class AgentServer {
         if (status?.type === "idle") {
           // Log conversation now that the full turn is complete
           if (session.userText) {
-            this.logConversation(agentId, session, session.userText).catch(() => {});
+            this.logConversation(agentId, session).catch(() => {});
             session.userText = null;
           }
 
@@ -605,8 +614,10 @@ export class AgentServer {
 
   // --- Conversation Logging ---
 
-  private async logConversation(agentId: string, session: SessionState, userText: string): Promise<void> {
+  private async logConversation(agentId: string, session: SessionState): Promise<void> {
     const now = new Date().toISOString();
+    const userText = session.userText;
+    if (!userText) return; // Nothing to log
 
     // Build content blocks from accumulated streaming parts
     const contentBlocks = session.streamingPartOrder
@@ -628,20 +639,6 @@ export class AgentServer {
         }
         return block;
       });
-
-    const userMessage = {
-      id: `msg_user_${Date.now()}`,
-      role: "user" as const,
-      contentBlocks: [{ type: "text", text: userText }],
-      timestamp: now,
-    };
-
-    const assistantMessage = {
-      id: session.assistantMessageId ?? `msg_asst_${Date.now()}`,
-      role: "assistant" as const,
-      contentBlocks,
-      timestamp: now,
-    };
 
     // Load existing conversation log or create new
     const logPath = conversationLogPath(this.workspacePath, agentId);
@@ -679,6 +676,32 @@ export class AgentServer {
         messages: [],
       };
     }
+
+    // Make idempotent: find and remove any previously logged messages for this turn
+    // by looking for the last user message matching the current userText
+    const lastUserIdx = conversationLog.messages.findLastIndex(
+      (m: any) => m.role === "user" && m.contentBlocks?.[0]?.text === userText,
+    );
+
+    if (lastUserIdx >= 0) {
+      // Remove the previous snapshot of this turn (user + assistant)
+      conversationLog.messages = conversationLog.messages.slice(0, lastUserIdx);
+    }
+
+    // Add current turn snapshot
+    const userMessage = {
+      id: `msg_user_${Date.now()}`,
+      role: "user" as const,
+      contentBlocks: [{ type: "text", text: userText }],
+      timestamp: now,
+    };
+
+    const assistantMessage = {
+      id: session.assistantMessageId ?? `msg_asst_${Date.now()}`,
+      role: "assistant" as const,
+      contentBlocks,
+      timestamp: now,
+    };
 
     conversationLog.messages.push(userMessage, assistantMessage);
 
