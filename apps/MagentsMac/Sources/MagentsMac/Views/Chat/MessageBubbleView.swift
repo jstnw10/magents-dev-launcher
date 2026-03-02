@@ -2,8 +2,10 @@ import SwiftUI
 
 struct MessageBubbleView: View {
     let message: ConversationMessage
+    /// The request ID from the question.asked WebSocket frame.
+    var requestID: String?
     /// Optional callback for answering interactive question tools.
-    var onQuestionAnswer: ((String) -> Void)?
+    var onQuestionAnswer: ((String, [[String]]) -> Void)?
 
     var body: some View {
         let isUser = message.role == .user
@@ -19,14 +21,20 @@ struct MessageBubbleView: View {
 
                 // Bubble
                 if isUser || message.parts.isEmpty {
-                    // User messages or messages without parts: show plain content
-                    Text(message.content)
-                        .textSelection(.enabled)
-                        .padding(10)
-                        .background {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(isUser ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.1))
+                    // User messages or messages without parts
+                    Group {
+                        if isUser {
+                            Text(message.content)
+                                .textSelection(.enabled)
+                        } else {
+                            MarkdownTextView(text: message.content)
                         }
+                    }
+                    .padding(10)
+                    .background {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(isUser ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.1))
+                    }
                 } else {
                     // Assistant messages with parts: render each part
                     VStack(alignment: .leading, spacing: 6) {
@@ -34,13 +42,12 @@ struct MessageBubbleView: View {
                             switch part.type {
                             case .text:
                                 if let text = part.text, !text.isEmpty {
-                                    Text(text)
-                                        .textSelection(.enabled)
+                                    MarkdownTextView(text: text)
                                 }
                             case .reasoning:
                                 ReasoningView(part: part)
                             case .tool:
-                                ToolCallView(part: part, onQuestionAnswer: onQuestionAnswer)
+                                ToolCallView(part: part, requestID: requestID, onQuestionAnswer: onQuestionAnswer)
                             case .stepStart, .stepFinish:
                                 EmptyView()
                             }

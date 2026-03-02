@@ -47,7 +47,7 @@ struct MessagePart: Identifiable, @unchecked Sendable {
 }
 
 struct ConversationMessage: Identifiable, Sendable {
-    var id: String { "\(role.rawValue)-\(timestamp)" }
+    let id: String
 
     let role: MessageRole
     let content: String

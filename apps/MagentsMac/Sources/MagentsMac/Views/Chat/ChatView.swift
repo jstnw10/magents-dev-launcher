@@ -19,8 +19,8 @@ struct ChatView: View {
                 ScrollView {
                     LazyVStack(spacing: 4) {
                         ForEach(viewModel.messages) { message in
-                            MessageBubbleView(message: message, onQuestionAnswer: { answer in
-                                Task { await viewModel.submitQuestionAnswer(answer, serverManager: serverManager) }
+                            MessageBubbleView(message: message, requestID: viewModel.pendingQuestionRequestID, onQuestionAnswer: { requestID, answers in
+                                Task { await viewModel.submitQuestionAnswer(answers: answers, requestID: requestID, serverManager: serverManager) }
                             })
                                 .id(message.id)
                         }
@@ -30,6 +30,7 @@ struct ChatView: View {
                             let streamingParts = viewModel.streamingPartOrder.compactMap { viewModel.streamingParts[$0] }
                             MessageBubbleView(
                                 message: ConversationMessage(
+                                    id: "streaming",
                                     role: .assistant,
                                     content: viewModel.streamingText,
                                     parts: streamingParts,
@@ -37,8 +38,9 @@ struct ChatView: View {
                                     tokens: nil,
                                     cost: nil
                                 ),
-                                onQuestionAnswer: { answer in
-                                    Task { await viewModel.submitQuestionAnswer(answer, serverManager: serverManager) }
+                                requestID: viewModel.pendingQuestionRequestID,
+                                onQuestionAnswer: { requestID, answers in
+                                    Task { await viewModel.submitQuestionAnswer(answers: answers, requestID: requestID, serverManager: serverManager) }
                                 }
                             )
                             .id("streaming-message")

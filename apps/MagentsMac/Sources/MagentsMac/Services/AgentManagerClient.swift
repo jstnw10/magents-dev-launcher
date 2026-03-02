@@ -76,6 +76,30 @@ final class AgentManagerClient: NSObject, @unchecked Sendable {
         }
     }
 
+    /// Send a question reply through the WebSocket.
+    func sendQuestionReply(requestID: String, answers: [[String]]) {
+        let frame: [String: Any] = ["type": "question.reply", "requestID": requestID, "answers": answers]
+        guard let data = try? JSONSerialization.data(withJSONObject: frame),
+              let jsonString = String(data: data, encoding: .utf8) else { return }
+        webSocketTask?.send(.string(jsonString)) { error in
+            if let error {
+                print("[AgentManagerClient] Send question reply error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Send a question reject through the WebSocket.
+    func sendQuestionReject(requestID: String) {
+        let frame: [String: Any] = ["type": "question.reject", "requestID": requestID]
+        guard let data = try? JSONSerialization.data(withJSONObject: frame),
+              let jsonString = String(data: data, encoding: .utf8) else { return }
+        webSocketTask?.send(.string(jsonString)) { error in
+            if let error {
+                print("[AgentManagerClient] Send question reject error: \(error.localizedDescription)")
+            }
+        }
+    }
+
     /// Send a cancel frame through the WebSocket.
     func sendCancel() {
         let frame: [String: String] = ["type": "cancel"]
@@ -191,6 +215,7 @@ enum AgentManagerFrame: @unchecked Sendable {
     case messageComplete(messageId: String, tokens: SendableDict?, cost: Double?)
     case error(message: String)
     case idle
+    case questionAsked(requestID: String, questions: [[String: Any]])
 
     static func parse(_ text: String) -> AgentManagerFrame? {
         guard let data = text.data(using: .utf8),
@@ -220,6 +245,10 @@ enum AgentManagerFrame: @unchecked Sendable {
             return .error(message: message)
         case "idle":
             return .idle
+        case "question.asked":
+            guard let requestID = json["requestID"] as? String,
+                  let questions = json["questions"] as? [[String: Any]] else { return nil }
+            return .questionAsked(requestID: requestID, questions: questions)
         default:
             return nil
         }

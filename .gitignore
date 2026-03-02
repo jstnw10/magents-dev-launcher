@@ -36,3 +36,6 @@ buck-out/
 *.keystore
 
 .env.local
+
+# Build output
+apps/magents-cli/dist/

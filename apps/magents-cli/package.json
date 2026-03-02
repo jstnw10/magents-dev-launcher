@@ -4,7 +4,7 @@
   "type": "module",
   "version": "0.0.0",
   "scripts": {
-    "build": "echo \"@magents/cli build pending\"",
+    "build": "bun build src/agent-server.ts --outdir dist --target node",
     "start": "bun run src/cli.ts",
     "test": "bun test",
     "lint": "echo \"@magents/cli lint pending\"",

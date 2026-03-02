@@ -31,9 +31,17 @@ final class ChatViewModel {
     let sessionId: String
     let workspacePath: String
 
+    /// The request ID from the most recent `question.asked` WebSocket frame.
+    var pendingQuestionRequestID: String?
+
     private var assistantMessageId: String?
     private var agentManagerClient: AgentManagerClient?
     private var webSocketTask: Task<Void, Never>?
+    private var loadingTimeoutTask: Task<Void, Never>?
+    private var hasReceivedStreamingEvents: Bool = false
+
+    /// Timeout duration in seconds before loading state is cleared with an error.
+    private let loadingTimeoutSeconds: UInt64 = 60
 
     init(agentId: String, sessionId: String, workspacePath: String) {
         self.agentId = agentId
@@ -75,6 +83,7 @@ final class ChatViewModel {
 
     /// Disconnect the WebSocket.
     func disconnectWebSocket() {
+        cancelLoadingTimeout()
         webSocketTask?.cancel()
         webSocketTask = nil
         agentManagerClient?.disconnect()
@@ -82,11 +91,53 @@ final class ChatViewModel {
         print("[ChatVM] WebSocket disconnected for agent \(agentId)")
     }
 
+    // MARK: - Loading Timeout
+
+    /// Start (or restart) the loading timeout timer.
+    /// If no streaming activity arrives within `loadingTimeoutSeconds`, loading is cleared with an error.
+    private func startLoadingTimeout() {
+        cancelLoadingTimeout()
+        loadingTimeoutTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.sleep(nanoseconds: self.loadingTimeoutSeconds * 1_000_000_000)
+            } catch {
+                return // Task was cancelled
+            }
+            guard !Task.isCancelled else { return }
+            // Timeout fired
+            if self.isLoading {
+                if self.hasReceivedStreamingEvents {
+                    // Events have been received — agent is working, just slowly. Restart the timeout.
+                    print("[ChatVM] ⏳ Loading timeout fired but streaming events were received — restarting timeout for agent \(self.agentId)")
+                    self.startLoadingTimeout()
+                } else {
+                    // No events received at all — clear loading state and show error
+                    if !self.streamingParts.isEmpty {
+                        self.finalizeStreamingMessage()
+                    }
+                    self.isLoading = false
+                    self.error = "No response received. The agent may be busy — try again."
+                    print("[ChatVM] ⚠️ Loading timeout fired after \(self.loadingTimeoutSeconds)s — no streaming events received for agent \(self.agentId)")
+                }
+            }
+        }
+    }
+
+    /// Cancel the loading timeout timer.
+    private func cancelLoadingTimeout() {
+        loadingTimeoutTask?.cancel()
+        loadingTimeoutTask = nil
+    }
+
     // MARK: - Handle WebSocket Frames
 
     private func handleFrame(_ frame: AgentManagerFrame) async {
         switch frame {
         case .messageStart(let messageId):
+            // Activity received — reset timeout
+            hasReceivedStreamingEvents = true
+            startLoadingTimeout()
             // If there's already a streaming message, finalize it first
             if !streamingParts.isEmpty {
                 finalizeStreamingMessage()
@@ -95,6 +146,9 @@ final class ChatViewModel {
             print("[ChatVM] WS: message.start messageId=\(messageId)")
 
         case .delta(let partId, let field, let delta):
+            // Activity received — reset timeout
+            hasReceivedStreamingEvents = true
+            startLoadingTimeout()
             guard let assistantId = self.assistantMessageId else { break }
             if var part = self.streamingParts[partId] {
                 if field == "text" {
@@ -113,6 +167,9 @@ final class ChatViewModel {
             }
 
         case .partUpdated(let partId, let partWrapper):
+            // Activity received — reset timeout
+            hasReceivedStreamingEvents = true
+            startLoadingTimeout()
             guard let assistantId = self.assistantMessageId else { break }
             let partDict = partWrapper.value
             let typeStr = partDict["type"] as? String ?? "text"
@@ -152,9 +209,12 @@ final class ChatViewModel {
             }
 
         case .messageComplete(_, _, _):
+            cancelLoadingTimeout()
             self.finalizeStreamingMessage()
 
         case .error(let message):
+            print("[ChatVM] WS error frame: \(message)")
+            cancelLoadingTimeout()
             if !streamingParts.isEmpty {
                 finalizeStreamingMessage()
             }
@@ -162,10 +222,16 @@ final class ChatViewModel {
             self.isLoading = false
 
         case .idle:
+            print("[ChatVM] WS: idle received")
+            cancelLoadingTimeout()
             if !streamingParts.isEmpty {
                 finalizeStreamingMessage()
             }
             self.isLoading = false
+
+        case .questionAsked(let requestID, _):
+            print("[ChatVM] WS: question.asked requestID=\(requestID)")
+            self.pendingQuestionRequestID = requestID
         }
     }
 
@@ -175,6 +241,7 @@ final class ChatViewModel {
         let finalParts = streamingPartOrder.compactMap { streamingParts[$0] }
         let finalText = streamingText.isEmpty ? "(No response received)" : streamingText
         let assistantMessage = ConversationMessage(
+            id: UUID().uuidString,
             role: .assistant,
             content: finalText,
             parts: finalParts,
@@ -244,6 +311,7 @@ final class ChatViewModel {
                 guard !textContent.isEmpty || hasToolParts else { return nil }
 
                 return ConversationMessage(
+                    id: msg.id,
                     role: role,
                     content: textContent,
                     parts: messageParts,
@@ -265,6 +333,7 @@ final class ChatViewModel {
         guard !text.isEmpty else { return }
 
         let userMessage = ConversationMessage(
+            id: UUID().uuidString,
             role: .user,
             content: text,
             parts: [],
@@ -279,6 +348,10 @@ final class ChatViewModel {
         streamingPartOrder = []
         assistantMessageId = nil
         error = nil
+        hasReceivedStreamingEvents = false
+
+        // Start loading timeout
+        startLoadingTimeout()
 
         // Ensure WebSocket is connected
         if agentManagerClient == nil {
@@ -291,41 +364,29 @@ final class ChatViewModel {
 
     // MARK: - Submit Question Answer
 
-    /// Submit an answer to an interactive question tool.
-    /// This sends the answer as a regular user message through the WebSocket.
-    func submitQuestionAnswer(_ answer: String, serverManager: ServerManager) async {
-        guard !answer.isEmpty else { return }
-
-        let userMessage = ConversationMessage(
-            role: .user,
-            content: answer,
-            parts: [],
-            timestamp: ISO8601DateFormatter().string(from: Date()),
-            tokens: nil,
-            cost: nil
-        )
-        messages.append(userMessage)
-        isLoading = true
-        streamingParts = [:]
-        streamingPartOrder = []
-        assistantMessageId = nil
-        error = nil
+    /// Submit a structured answer to an interactive question tool via the Question API.
+    /// Sends a `question.reply` WebSocket frame instead of a regular user message.
+    func submitQuestionAnswer(answers: [[String]], requestID: String, serverManager: ServerManager) async {
+        print("[ChatVM] Submitting question reply for requestID=\(requestID)")
 
         if agentManagerClient == nil {
             await connectWebSocket(serverManager: serverManager)
         }
 
-        agentManagerClient?.sendMessage(answer)
+        agentManagerClient?.sendQuestionReply(requestID: requestID, answers: answers)
+        pendingQuestionRequestID = nil
     }
 
     // MARK: - Cancel Streaming
 
     func cancelStreaming() {
+        cancelLoadingTimeout()
         agentManagerClient?.sendCancel()
 
         if !streamingParts.isEmpty {
             let finalParts = streamingPartOrder.compactMap { streamingParts[$0] }
             let assistantMessage = ConversationMessage(
+                id: UUID().uuidString,
                 role: .assistant,
                 content: streamingText,
                 parts: finalParts,
