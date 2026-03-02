@@ -987,6 +987,7 @@ describe("CLI agent commands", () => {
 
   it("agent manager-start with --opencode-url skips server.getOrStart", async () => {
     let getOrStartCalled = false;
+    let createAgentServerCalled = false;
     const base = setupTestCli();
     const mockManager = new MockAgentManager();
     const agentDeps: AgentDeps = {
@@ -1007,20 +1008,21 @@ describe("CLI agent commands", () => {
         return mockManager;
       },
       createAgentServer: () => ({
-        start: async () => createMockServerInfo(),
+        start: async () => {
+          createAgentServerCalled = true;
+          throw new Error("__TEST_STOP__");
+        },
         stop: async () => {},
       }),
     };
     const deps = { ...base.deps, agentDeps };
 
-    // manager-start hangs forever with `await new Promise(() => {})`,
-    // so race it with a short timeout — we only need to verify getOrStart was not called.
-    await Promise.race([
-      runCli(["agent", "manager-start", "--opencode-url", "http://localhost:4096", "--port", "5555"], deps),
-      new Promise((resolve) => setTimeout(resolve, 200)),
-    ]);
+    // createAgentServer.start() throws __TEST_STOP__ so runCli returns
+    // immediately instead of hanging forever — no Promise.race needed.
+    await runCli(["agent", "manager-start", "--opencode-url", "http://localhost:4096", "--port", "5555"], deps);
 
     expect(getOrStartCalled).toBe(false);
+    expect(createAgentServerCalled).toBe(true);
   });
 
   it("agent manager-start without --opencode-url calls server.getOrStart", async () => {
@@ -1045,16 +1047,17 @@ describe("CLI agent commands", () => {
         return mockManager;
       },
       createAgentServer: () => ({
-        start: async () => createMockServerInfo(),
+        start: async () => {
+          throw new Error("__TEST_STOP__");
+        },
         stop: async () => {},
       }),
     };
     const deps = { ...base.deps, agentDeps };
 
-    await Promise.race([
-      runCli(["agent", "manager-start", "--port", "5555"], deps),
-      new Promise((resolve) => setTimeout(resolve, 200)),
-    ]);
+    // createAgentServer.start() throws __TEST_STOP__ so runCli returns
+    // immediately instead of hanging forever — no Promise.race needed.
+    await runCli(["agent", "manager-start", "--port", "5555"], deps);
 
     expect(getOrStartCalled).toBe(true);
   });

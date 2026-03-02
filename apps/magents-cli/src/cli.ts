@@ -26,11 +26,12 @@ import { SpecialistRegistry, type InteractiveIO } from "./specialist-registry";
 import { OpenCodeServer } from "./opencode-server";
 import { createOpenCodeClient } from "./opencode-client";
 import { createMcpServer } from "./mcp/server";
-import { AgentServer, DEFAULT_AGENT_SERVER_PORT } from "./agent-server";
+import { AgentServer, DEFAULT_AGENT_SERVER_PORT, type AgentServerInfo } from "./agent-server";
 
 export interface AgentDeps {
   readonly server: Pick<OpenCodeServer, "start" | "stop" | "status" | "getOrStart">;
   readonly createManager: (serverUrl: string) => AgentManager;
+  readonly createAgentServer?: (options: { manager: AgentManager; openCodeUrl: string; port: number; workspacePath: string; specialistRegistry: SpecialistRegistry }) => { start(): Promise<AgentServerInfo>; stop(): Promise<void> };
 }
 
 export interface SpecialistDeps {
@@ -393,15 +394,25 @@ export async function runCli(argv: string[], deps?: CliDependencies) {
 
         if (command === "manager-start") {
           const port = parseInt(parseValue(args, "--port") ?? String(DEFAULT_AGENT_SERVER_PORT), 10);
-          const serverInfo = await server.getOrStart(workspacePath);
-          const mgr = agentDeps.createManager(serverInfo.url);
-          const agentServer = new AgentServer({
-            workspacePath,
-            manager: mgr,
-            openCodeUrl: serverInfo.url,
-            port,
-            specialistRegistry,
-          });
+          const openCodeUrl = parseValue(args, "--opencode-url");
+
+          let serverUrl: string;
+          if (openCodeUrl) {
+            serverUrl = openCodeUrl;
+          } else {
+            const serverInfo = await server.getOrStart(workspacePath);
+            serverUrl = serverInfo.url;
+          }
+
+          const mgr = agentDeps.createManager(serverUrl);
+          const agentServer = agentDeps.createAgentServer?.({ manager: mgr, openCodeUrl: serverUrl, port, workspacePath, specialistRegistry })
+            ?? new AgentServer({
+              workspacePath,
+              manager: mgr,
+              openCodeUrl: serverUrl,
+              port,
+              specialistRegistry,
+            });
           const info = await agentServer.start();
           resolvedDeps.stdout(json(info));
           // Keep process alive
