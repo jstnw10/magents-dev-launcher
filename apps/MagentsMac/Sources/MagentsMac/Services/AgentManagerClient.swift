@@ -150,6 +150,23 @@ final class AgentManagerClient: NSObject, @unchecked Sendable {
         return try JSONDecoder().decode(AgentMetadata.self, from: data)
     }
 
+    /// List all agents via agent-manager HTTP API.
+    func listAgents() async throws -> [AgentMetadata] {
+        let url = baseURL.appendingPathComponent("agent")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw AgentManagerClientError.httpError(statusCode: statusCode)
+        }
+
+        let result = try JSONDecoder().decode(AgentListResponse.self, from: data)
+        return result.agents
+    }
+
     /// Load conversation history for an agent via HTTP.
     func getConversation(agentId: String) async throws -> AgentConversationResponse {
         let url = baseURL.appendingPathComponent("agent/\(agentId)/conversation")
@@ -267,6 +284,12 @@ struct SpecialistSummary: Codable, Identifiable, Sendable, Hashable {
     let description: String
     let defaultModel: String?
     let source: String
+}
+
+// MARK: - Agent List Response (from GET /agent)
+
+struct AgentListResponse: Codable, Sendable {
+    let agents: [AgentMetadata]
 }
 
 // MARK: - Conversation Response (from GET /agent/:id/conversation)

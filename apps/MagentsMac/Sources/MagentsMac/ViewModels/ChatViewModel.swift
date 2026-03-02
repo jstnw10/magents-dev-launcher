@@ -31,6 +31,9 @@ final class ChatViewModel {
     let sessionId: String
     let workspacePath: String
 
+    /// Tracks sub-agents spawned during this agent's turns.
+    let subAgentTracker = SubAgentTracker()
+
     /// The request ID from the most recent `question.asked` WebSocket frame.
     var pendingQuestionRequestID: String?
 
@@ -38,6 +41,7 @@ final class ChatViewModel {
     private var agentManagerClient: AgentManagerClient?
     private var webSocketTask: Task<Void, Never>?
     private var loadingTimeoutTask: Task<Void, Never>?
+    private var subAgentPollTask: Task<Void, Never>?
     private var hasReceivedStreamingEvents: Bool = false
 
     /// Accumulated token counts across multiple `message.complete` events in a single turn.
@@ -90,6 +94,7 @@ final class ChatViewModel {
     /// Disconnect the WebSocket.
     func disconnectWebSocket() {
         cancelLoadingTimeout()
+        stopSubAgentPolling()
         webSocketTask?.cancel()
         webSocketTask = nil
         agentManagerClient?.disconnect()
@@ -243,6 +248,7 @@ final class ChatViewModel {
         case .idle:
             print("[ChatVM] WS: idle received")
             cancelLoadingTimeout()
+            stopSubAgentPolling()
             if !streamingParts.isEmpty {
                 finalizeStreamingMessage()
             }
@@ -410,7 +416,7 @@ final class ChatViewModel {
 
     // MARK: - Send Message (via WebSocket)
 
-    func sendMessage(serverManager: ServerManager) async {
+    func sendMessage(serverManager: ServerManager, workspaceViewModel: WorkspaceViewModel? = nil) async {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
@@ -434,6 +440,13 @@ final class ChatViewModel {
         accumulatedCost = 0
         error = nil
         hasReceivedStreamingEvents = false
+
+        // Start sub-agent tracking if workspace context is available
+        if let workspaceViewModel {
+            let currentAgents = workspaceViewModel.agentsForWorkspace.values.flatMap { $0 }
+            subAgentTracker.startTracking(parentAgentId: agentId, currentAgents: Array(currentAgents))
+            startSubAgentPolling(serverManager: serverManager, workspaceViewModel: workspaceViewModel)
+        }
 
         // Start loading timeout
         startLoadingTimeout()
@@ -462,10 +475,50 @@ final class ChatViewModel {
         pendingQuestionRequestID = nil
     }
 
+    // MARK: - Sub-Agent Polling
+
+    /// Start polling for new sub-agents while the parent agent is busy.
+    private func startSubAgentPolling(serverManager: ServerManager, workspaceViewModel: WorkspaceViewModel) {
+        stopSubAgentPolling()
+        let workspacePath = self.workspacePath
+
+        subAgentPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(4))
+                guard !Task.isCancelled, let self else { break }
+
+                // Reload agents from the server
+                guard let baseURL = serverManager.agentManagerURL(for: workspacePath) else { continue }
+                let client = AgentManagerClient(baseURL: baseURL)
+                do {
+                    let agents = try await client.listAgents()
+                    self.subAgentTracker.checkForNewAgents(agents: agents)
+
+                    // Register event handlers for newly discovered sub-agents
+                    for subAgent in self.subAgentTracker.activeSubAgents where !subAgent.isComplete {
+                        let tracker = self.subAgentTracker
+                        workspaceViewModel.registerEventHandler(sessionId: subAgent.sessionId) { eventData in
+                            tracker.handleEvent(eventData: eventData)
+                        }
+                    }
+                } catch {
+                    print("[ChatVM] Sub-agent poll error: \(error)")
+                }
+            }
+        }
+    }
+
+    /// Stop polling for sub-agents.
+    private func stopSubAgentPolling() {
+        subAgentPollTask?.cancel()
+        subAgentPollTask = nil
+    }
+
     // MARK: - Cancel Streaming
 
     func cancelStreaming() {
         cancelLoadingTimeout()
+        stopSubAgentPolling()
         agentManagerClient?.sendCancel()
 
         if !streamingParts.isEmpty {

@@ -40,12 +40,12 @@ struct ContentView: View {
                let workspace = viewModel.workspaces.first(where: { $0.id == newId }) {
                 Task {
                     try? await serverManager.getOrStart(workspacePath: workspace.path)
-                    await viewModel.connectSSE(for: workspace, serverManager: serverManager)
+                    await viewModel.connectWorkspaceEvents(for: workspace, serverManager: serverManager)
                 }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-            viewModel.disconnectAllSSE()
+            viewModel.disconnectAllWorkspaceEvents()
             serverManager.stopAll()
         }
     }
