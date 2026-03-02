@@ -245,7 +245,7 @@ final class ServerManager {
         let bunPath = try await findBunBinary()
 
         // Find the CLI entry point (resolved to absolute path)
-        let cliPath = try await findCliEntryPoint(workspacePath: workspacePath)
+        let cliPath = try findCliEntryPoint()
 
         // Allocate port for agent-manager
         var port = nextPort
@@ -348,132 +348,35 @@ final class ServerManager {
         return path
     }
 
-    private func findCliEntryPoint(workspacePath: String) async throws -> String {
-        let fm = Foundation.FileManager.default
-        let home = fm.homeDirectoryForCurrentUser.path
-        print("[ServerManager] findCliEntryPoint: workspacePath = \(workspacePath)")
+    private func findCliEntryPoint(sourceFile: String = #filePath) throws -> String {
+        // ServerManager.swift is at:
+        //   {monorepo}/apps/MagentsMac/Sources/MagentsMac/Services/ServerManager.swift
+        // CLI is at:
+        //   {monorepo}/apps/magents-cli/src/cli.ts
+        let monorepoRoot = URL(fileURLWithPath: sourceFile)
+            .deletingLastPathComponent()  // Services/
+            .deletingLastPathComponent()  // MagentsMac/
+            .deletingLastPathComponent()  // Sources/
+            .deletingLastPathComponent()  // MagentsMac/
+            .deletingLastPathComponent()  // apps/
+            .deletingLastPathComponent()  // monorepo root
 
-        // 0. Check workspace .env file for MAGENTS_CLI_PATH (per-workspace override)
-        let envPaths = [
-            "\(workspacePath)/.env",
-            "\(workspacePath)/.workspace/.env",
-            URL(fileURLWithPath: workspacePath).deletingLastPathComponent().path + "/.env",
-        ]
-        for envPath in envPaths {
-            if fm.fileExists(atPath: envPath),
-               let contents = try? String(contentsOfFile: envPath, encoding: .utf8) {
-                for line in contents.components(separatedBy: .newlines) {
-                    let trimmed = line.trimmingCharacters(in: .whitespaces)
-                    if trimmed.hasPrefix("MAGENTS_CLI_PATH=") {
-                        var value = String(trimmed.dropFirst("MAGENTS_CLI_PATH=".count))
-                        // Remove surrounding quotes if present
-                        if (value.hasPrefix("\"") && value.hasSuffix("\"")) ||
-                           (value.hasPrefix("'") && value.hasSuffix("'")) {
-                            value = String(value.dropFirst().dropLast())
-                        }
-                        // Expand ~ to home directory
-                        if value.hasPrefix("~") {
-                            value = value.replacingOccurrences(of: "~", with: home, options: [], range: value.startIndex..<value.index(after: value.startIndex))
-                        }
-                        if fm.fileExists(atPath: value) {
-                            print("[ServerManager] Found CLI via .env: \(value)")
-                            return value
-                        } else {
-                            print("[ServerManager] .env MAGENTS_CLI_PATH set but file not found: \(value)")
-                        }
-                    }
-                }
-            }
+        let cliPath = monorepoRoot
+            .appendingPathComponent("apps")
+            .appendingPathComponent("magents-cli")
+            .appendingPathComponent("src")
+            .appendingPathComponent("cli.ts")
+            .path
+
+        guard Foundation.FileManager.default.fileExists(atPath: cliPath) else {
+            print("[ServerManager] CLI not found at derived path: \(cliPath)")
+            print("[ServerManager] Source file: \(sourceFile)")
+            print("[ServerManager] Derived monorepo root: \(monorepoRoot.path)")
+            throw ServerManagerError.cliNotFound
         }
 
-        // 1. Check ~/.magents/config.json for cliPath (global fallback)
-        let configPath = "\(home)/.magents/config.json"
-        if fm.fileExists(atPath: configPath),
-           let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
-           let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let path = config["cliPath"] as? String,
-           fm.fileExists(atPath: path) {
-            print("[ServerManager] Found CLI via config.json: \(path)")
-            return path
-        }
-
-        // 2. Check well-known development locations
-        let devCandidates = [
-            "\(home)/Dev/magents-dev-launcher/apps/magents-cli/src/cli.ts",
-            "\(home)/dev/magents-dev-launcher/apps/magents-cli/src/cli.ts",
-            "\(home)/Projects/magents-dev-launcher/apps/magents-cli/src/cli.ts",
-            "\(home)/Code/magents-dev-launcher/apps/magents-cli/src/cli.ts",
-            "\(home)/src/magents-dev-launcher/apps/magents-cli/src/cli.ts",
-        ]
-        for candidate in devCandidates {
-            if fm.fileExists(atPath: candidate) {
-                print("[ServerManager] Found CLI at dev location: \(candidate)")
-                return candidate
-            }
-        }
-
-        // 3. Check if the workspace IS the magents repo (for development in the magents repo itself)
-        let wsCandidate = "\(workspacePath)/apps/magents-cli/src/cli.ts"
-        if fm.fileExists(atPath: wsCandidate) {
-            print("[ServerManager] Found CLI in workspace: \(wsCandidate)")
-            return wsCandidate
-        }
-
-        // 4. Check workspace.json for the original repo (might be the magents repo)
-        let wsJsonPaths = [
-            "\(workspacePath)/.workspace/workspace.json",
-            URL(fileURLWithPath: workspacePath).deletingLastPathComponent().path + "/.workspace/workspace.json",
-        ]
-        for wsJsonPath in wsJsonPaths {
-            if fm.fileExists(atPath: wsJsonPath),
-               let data = try? Data(contentsOf: URL(fileURLWithPath: wsJsonPath)),
-               let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                for key in ["worktreePath", "repositoryPath"] {
-                    if let repoPath = config[key] as? String {
-                        let repoCandidate = "\(repoPath)/apps/magents-cli/src/cli.ts"
-                        if fm.fileExists(atPath: repoCandidate) {
-                            print("[ServerManager] Found CLI via workspace.json \(key): \(repoCandidate)")
-                            return repoCandidate
-                        }
-                    }
-                }
-            }
-        }
-
-        print("[ServerManager] ERROR: Could not find magents CLI.")
-        print("[ServerManager] Fix: Create .env in your workspace with:")
-        print("[ServerManager]   MAGENTS_CLI_PATH=/path/to/magents-dev-launcher/apps/magents-cli/src/cli.ts")
-        throw ServerManagerError.cliNotFound
-    }
-
-    // MARK: - Helpers
-
-    private func readRepositoryPath(workspacePath: String) -> String? {
-        let fm = Foundation.FileManager.default
-
-        // Check at workspacePath level and parent level
-        let candidates = [
-            "\(workspacePath)/.workspace/workspace.json",
-            URL(fileURLWithPath: workspacePath).deletingLastPathComponent().path + "/.workspace/workspace.json",
-        ]
-
-        for configPath in candidates {
-            if fm.fileExists(atPath: configPath),
-               let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
-               let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                // Try worktreePath first — this points to the actual checkout with our code
-                if let worktreePath = config["worktreePath"] as? String {
-                    print("[ServerManager] Found worktreePath: \(worktreePath) from \(configPath)")
-                    return worktreePath
-                }
-                // Then try repositoryPath
-                if let repoPath = config["repositoryPath"] as? String {
-                    print("[ServerManager] Found repositoryPath: \(repoPath) from \(configPath)")
-                    return repoPath
-                }
-            }
-        }
-        return nil
+        print("[ServerManager] Found CLI via #filePath: \(cliPath)")
+        return cliPath
     }
 
     private nonisolated func isPIDAlive(_ pid: Int) -> Bool {
