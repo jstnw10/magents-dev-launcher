@@ -350,97 +350,64 @@ final class ServerManager {
 
     private func findCliEntryPoint(workspacePath: String) async throws -> String {
         let fm = Foundation.FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
         print("[ServerManager] findCliEntryPoint: workspacePath = \(workspacePath)")
 
-        // 1. Check ~/.magents/config.json for cliPath (already absolute)
-        let home = fm.homeDirectoryForCurrentUser.path
+        // 1. Check ~/.magents/config.json for cliPath (explicit config — highest priority)
         let configPath = "\(home)/.magents/config.json"
         if fm.fileExists(atPath: configPath),
            let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
            let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let path = config["cliPath"] as? String {
-            print("[ServerManager] Config cliPath: \(path) — exists: \(fm.fileExists(atPath: path))")
-            if fm.fileExists(atPath: path) {
-                return path
-            }
+           let path = config["cliPath"] as? String,
+           fm.fileExists(atPath: path) {
+            print("[ServerManager] Found CLI via config.json: \(path)")
+            return path
         }
 
-        // 2. Try to find the CLI relative to the workspace path (absolute paths)
-        //    The workspace might BE the repo root, or be nested inside it
-        let wsURL = URL(fileURLWithPath: workspacePath)
-        let candidates = [
-            // Workspace IS the repo root
-            "\(workspacePath)/apps/magents-cli/src/cli.ts",
-            // Workspace is one level inside the repo (e.g. worktree)
-            wsURL.deletingLastPathComponent().path + "/apps/magents-cli/src/cli.ts",
-            // Workspace is two levels inside (e.g. workspaces/<id>/<repo>)
-            wsURL.deletingLastPathComponent().deletingLastPathComponent().path + "/apps/magents-cli/src/cli.ts",
+        // 2. Check well-known development locations
+        let devCandidates = [
+            "\(home)/Dev/magents-dev-launcher/apps/magents-cli/src/cli.ts",
+            "\(home)/dev/magents-dev-launcher/apps/magents-cli/src/cli.ts",
+            "\(home)/Projects/magents-dev-launcher/apps/magents-cli/src/cli.ts",
+            "\(home)/Code/magents-dev-launcher/apps/magents-cli/src/cli.ts",
+            "\(home)/src/magents-dev-launcher/apps/magents-cli/src/cli.ts",
         ]
-        for candidate in candidates {
-            print("[ServerManager] Checking CLI candidate: \(candidate) — exists: \(fm.fileExists(atPath: candidate))")
+        for candidate in devCandidates {
             if fm.fileExists(atPath: candidate) {
+                print("[ServerManager] Found CLI at dev location: \(candidate)")
                 return candidate
             }
         }
 
-        // 3. Check workspace.json for worktreePath and repositoryPath
-        let wsJsonCandidates = [
+        // 3. Check if the workspace IS the magents repo (for development in the magents repo itself)
+        let wsCandidate = "\(workspacePath)/apps/magents-cli/src/cli.ts"
+        if fm.fileExists(atPath: wsCandidate) {
+            print("[ServerManager] Found CLI in workspace: \(wsCandidate)")
+            return wsCandidate
+        }
+
+        // 4. Check workspace.json for the original repo (might be the magents repo)
+        let wsJsonPaths = [
             "\(workspacePath)/.workspace/workspace.json",
-            wsURL.deletingLastPathComponent().path + "/.workspace/workspace.json",
+            URL(fileURLWithPath: workspacePath).deletingLastPathComponent().path + "/.workspace/workspace.json",
         ]
-        for wsJsonPath in wsJsonCandidates {
-            print("[ServerManager] Checking workspace.json: \(wsJsonPath) — exists: \(fm.fileExists(atPath: wsJsonPath))")
+        for wsJsonPath in wsJsonPaths {
             if fm.fileExists(atPath: wsJsonPath),
                let data = try? Data(contentsOf: URL(fileURLWithPath: wsJsonPath)),
-               let wsConfig = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-
-                // Check worktreePath first (has our branch's code)
-                if let worktreePath = wsConfig["worktreePath"] as? String {
-                    let wtCandidate = "\(worktreePath)/apps/magents-cli/src/cli.ts"
-                    print("[ServerManager] Checking worktreePath candidate: \(wtCandidate) — exists: \(fm.fileExists(atPath: wtCandidate))")
-                    if fm.fileExists(atPath: wtCandidate) {
-                        return wtCandidate
-                    }
-                }
-
-                // Then check repositoryPath (original repo)
-                if let repoPath = wsConfig["repositoryPath"] as? String {
-                    let repoCandidate = "\(repoPath)/apps/magents-cli/src/cli.ts"
-                    print("[ServerManager] Checking repositoryPath candidate: \(repoCandidate) — exists: \(fm.fileExists(atPath: repoCandidate))")
-                    if fm.fileExists(atPath: repoCandidate) {
-                        return repoCandidate
+               let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                for key in ["worktreePath", "repositoryPath"] {
+                    if let repoPath = config[key] as? String {
+                        let repoCandidate = "\(repoPath)/apps/magents-cli/src/cli.ts"
+                        if fm.fileExists(atPath: repoCandidate) {
+                            print("[ServerManager] Found CLI via workspace.json \(key): \(repoCandidate)")
+                            return repoCandidate
+                        }
                     }
                 }
             }
         }
 
-        // 4. Scan subdirectories of workspacePath for the CLI
-        //    The workspace root often contains the repo as a subdirectory
-        if let contents = try? fm.contentsOfDirectory(atPath: workspacePath) {
-            for item in contents where !item.hasPrefix(".") {
-                let subCandidate = "\(workspacePath)/\(item)/apps/magents-cli/src/cli.ts"
-                print("[ServerManager] Checking subdirectory candidate: \(subCandidate) — exists: \(fm.fileExists(atPath: subCandidate))")
-                if fm.fileExists(atPath: subCandidate) {
-                    return subCandidate
-                }
-            }
-        }
-
-        // 5. Try `git rev-parse --show-toplevel` to find the repo root
-        let result = try await ShellRunner.run(
-            "git rev-parse --show-toplevel",
-            workingDirectory: workspacePath
-        )
-        if result.exitCode == 0 {
-            let repoRoot = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-            let gitCandidate = "\(repoRoot)/apps/magents-cli/src/cli.ts"
-            print("[ServerManager] Checking git toplevel candidate: \(gitCandidate) — exists: \(fm.fileExists(atPath: gitCandidate))")
-            if fm.fileExists(atPath: gitCandidate) {
-                return gitCandidate
-            }
-        }
-
-        print("[ServerManager] ERROR: Could not find CLI entry point from workspacePath: \(workspacePath)")
+        print("[ServerManager] ERROR: Could not find magents CLI. Set cliPath in ~/.magents/config.json")
         throw ServerManagerError.cliNotFound
     }
 
@@ -597,7 +564,7 @@ enum ServerManagerError: Error, LocalizedError {
         case .bunNotFound:
             return "bun binary not found. Install it or set bunPath in ~/.magents/config.json"
         case .cliNotFound:
-            return "magents CLI entry point not found. Set cliPath in ~/.magents/config.json"
+            return "magents CLI not found. Create ~/.magents/config.json with: {\"cliPath\": \"/path/to/magents-dev-launcher/apps/magents-cli/src/cli.ts\"}"
         case .agentManagerStartFailed:
             return "Failed to start agent-manager server"
         }
