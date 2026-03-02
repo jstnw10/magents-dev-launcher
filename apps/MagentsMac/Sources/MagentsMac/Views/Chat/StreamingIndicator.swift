@@ -11,7 +11,7 @@ struct StreamingIndicator: View {
                 .controlSize(.small)
 
             Text("Thinking" + String(repeating: ".", count: dotCount + 1))
-                .font(.subheadline)
+                .font(.body)
                 .foregroundStyle(.secondary)
         }
         .padding(10)

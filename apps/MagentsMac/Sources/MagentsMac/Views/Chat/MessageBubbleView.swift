@@ -149,7 +149,7 @@ struct MessageBubbleView: View {
             VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
                 // Role label
                 Text(isUser ? "You" : "Assistant")
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
 
                 // Bubble
@@ -213,13 +213,13 @@ struct MessageBubbleView: View {
                             Text(String(format: "$%.2f", cost))
                         }
                     }
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.tertiary)
                 }
 
                 // Relative timestamp
                 Text(relativeTime(from: message.timestamp))
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.quaternary)
             }
 

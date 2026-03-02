@@ -78,11 +78,11 @@ struct ChatView: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.yellow)
                     Text(error)
-                        .font(.caption)
+                        .font(.callout)
                     Spacer()
                     Button("Dismiss") { viewModel.error = nil }
                         .buttonStyle(.plain)
-                        .font(.caption)
+                        .font(.callout)
                 }
                 .padding(8)
                 .background(Color.red.opacity(0.1))
@@ -119,7 +119,7 @@ struct ChatView: View {
         @Bindable var vm = viewModel
         HStack(alignment: .bottom, spacing: 8) {
             TextEditor(text: $vm.inputText)
-                .font(.body)
+                .font(.system(size: 15))
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 36, maxHeight: 120)
                 .fixedSize(horizontal: false, vertical: true)

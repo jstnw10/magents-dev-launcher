@@ -19,15 +19,15 @@ struct GroupedContentView: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "rectangle.stack")
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(Color.accentColor)
                     Text(groupName)
-                        .font(.caption)
+                        .font(.callout)
                         .fontWeight(.medium)
                         .foregroundStyle(.secondary)
                     Spacer()
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption2)
+                        .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
                 .contentShape(Rectangle())

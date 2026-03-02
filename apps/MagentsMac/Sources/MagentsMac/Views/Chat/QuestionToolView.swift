@@ -31,10 +31,10 @@ struct QuestionToolView: View {
                 ProgressView()
                     .controlSize(.mini)
                 Image(systemName: "questionmark.circle")
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                 Text("Question")
-                    .font(.caption)
+                    .font(.callout)
                     .fontWeight(.medium)
                 Spacer()
             }
@@ -82,13 +82,13 @@ struct QuestionToolView: View {
         VStack(alignment: .leading, spacing: 8) {
             if let header = question["header"] as? String, !header.isEmpty {
                 Text(header)
-                    .font(.caption)
+                    .font(.callout)
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
             }
             if let text = question["question"] as? String, !text.isEmpty {
                 Text(text)
-                    .font(.callout)
+                    .font(.body)
             }
 
             let options = question["options"] as? [[String: Any]] ?? []
@@ -118,11 +118,11 @@ struct QuestionToolView: View {
                     .font(.body)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(label)
-                        .font(.callout)
+                        .font(.body)
                         .fontWeight(isSelected ? .medium : .regular)
                     if let desc = description, !desc.isEmpty {
                         Text(desc)
-                            .font(.caption)
+                            .font(.callout)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }

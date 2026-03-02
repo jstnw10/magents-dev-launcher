@@ -46,15 +46,15 @@ struct MarkdownTextView: View {
                 for run in attributed.runs {
                     if let intent = run.inlinePresentationIntent, intent.contains(.code) {
                         attributed[run.range].backgroundColor = .gray.opacity(0.2)
-                        attributed[run.range].font = .system(size: 13, design: .monospaced)
+                        attributed[run.range].font = .system(size: 15, design: .monospaced)
                     }
                 }
             }()
             Text(attributed)
-                .font(.body)
+                .font(.system(size: 15))
         } else {
             Text(trimmed)
-                .font(.body)
+                .font(.system(size: 15))
         }
     }
 
@@ -87,15 +87,15 @@ struct MarkdownTextView: View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             if ordered, let number {
                 Text("\(number).")
-                    .font(.body)
+                    .font(.system(size: 15))
                     .foregroundStyle(.secondary)
             } else {
                 Text("•")
-                    .font(.body)
+                    .font(.system(size: 15))
                     .foregroundStyle(.secondary)
             }
             inlineMarkdownText(content)
-                .font(.body)
+                .font(.system(size: 15))
         }
         .padding(.leading, CGFloat(indent) * 16)
     }
@@ -109,7 +109,7 @@ struct MarkdownTextView: View {
                 .fill(Color.secondary.opacity(0.4))
                 .frame(width: 3)
             inlineMarkdownText(content)
-                .font(.body)
+                .font(.system(size: 15))
                 .foregroundStyle(.secondary)
                 .padding(.leading, 10)
         }
@@ -125,7 +125,7 @@ struct MarkdownTextView: View {
             HStack(spacing: 0) {
                 ForEach(Array(headers.enumerated()), id: \.offset) { _, header in
                     inlineMarkdownText(header)
-                        .font(.body)
+                        .font(.system(size: 15))
                         .fontWeight(.bold)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 8)
@@ -138,7 +138,7 @@ struct MarkdownTextView: View {
                 HStack(spacing: 0) {
                     ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
                         inlineMarkdownText(cell)
-                            .font(.body)
+                            .font(.system(size: 15))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
@@ -163,7 +163,7 @@ struct MarkdownTextView: View {
                 for run in attributed.runs {
                     if let intent = run.inlinePresentationIntent, intent.contains(.code) {
                         attributed[run.range].backgroundColor = .gray.opacity(0.2)
-                        attributed[run.range].font = .system(size: 13, design: .monospaced)
+                        attributed[run.range].font = .system(size: 15, design: .monospaced)
                     }
                 }
             }()
@@ -182,7 +182,7 @@ struct MarkdownTextView: View {
             if !language.isEmpty {
                 HStack {
                     Text(language)
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                     Spacer()
                     copyButton(for: code)
@@ -202,7 +202,7 @@ struct MarkdownTextView: View {
             // Code content
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(code)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.system(size: 14, design: .monospaced))
                     .textSelection(.enabled)
                     .padding(.horizontal, 10)
                     .padding(.bottom, 10)
@@ -218,7 +218,7 @@ struct MarkdownTextView: View {
             NSPasteboard.general.setString(code, forType: .string)
         } label: {
             Image(systemName: "doc.on.doc")
-                .font(.caption)
+                .font(.callout)
                 .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)

@@ -13,15 +13,15 @@ struct ReasoningView: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "brain")
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(.purple)
                     Text("Thinking…")
-                        .font(.caption)
+                        .font(.callout)
                         .fontWeight(.medium)
                         .foregroundStyle(.secondary)
                     Spacer()
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption2)
+                        .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
                 .contentShape(Rectangle())
@@ -34,7 +34,7 @@ struct ReasoningView: View {
                 Divider()
                     .padding(.horizontal, 8)
                 Text(text)
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .padding(8)
