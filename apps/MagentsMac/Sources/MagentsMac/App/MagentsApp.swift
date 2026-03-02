@@ -6,6 +6,7 @@ struct MagentsApp: App {
     @State private var viewModel = WorkspaceViewModel()
     @State private var tabManager = TabManager()
     @State private var serverManager = ServerManager()
+    @State private var chatViewModelStore = ChatViewModelStore()
 
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
@@ -18,6 +19,7 @@ struct MagentsApp: App {
                 .environment(viewModel)
                 .environment(tabManager)
                 .environment(serverManager)
+                .environment(chatViewModelStore)
         }
         .windowStyle(.automatic)
         .commands {

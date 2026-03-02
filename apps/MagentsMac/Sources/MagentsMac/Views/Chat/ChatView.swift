@@ -2,14 +2,14 @@ import SwiftUI
 
 struct ChatView: View {
     @Environment(ServerManager.self) private var serverManager
-    @State private var viewModel: ChatViewModel
+    @Environment(ChatViewModelStore.self) private var store
 
-    init(agentId: String, sessionId: String, workspacePath: String) {
-        _viewModel = State(initialValue: ChatViewModel(
-            agentId: agentId,
-            sessionId: sessionId,
-            workspacePath: workspacePath
-        ))
+    let agentId: String
+    let sessionId: String
+    let workspacePath: String
+
+    private var viewModel: ChatViewModel {
+        store.viewModel(agentId: agentId, sessionId: sessionId, workspacePath: workspacePath)
     }
 
     var body: some View {
@@ -88,9 +88,6 @@ struct ChatView: View {
             await viewModel.loadConversation(serverManager: serverManager)
             await viewModel.connectWebSocket(serverManager: serverManager)
         }
-        .onDisappear {
-            viewModel.disconnectWebSocket()
-        }
     }
 
     // MARK: - Empty State
@@ -108,9 +105,11 @@ struct ChatView: View {
 
     // MARK: - Input Area
 
+    @ViewBuilder
     private var inputArea: some View {
+        @Bindable var vm = viewModel
         HStack(alignment: .bottom, spacing: 8) {
-            TextEditor(text: $viewModel.inputText)
+            TextEditor(text: $vm.inputText)
                 .font(.body)
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 36, maxHeight: 120)

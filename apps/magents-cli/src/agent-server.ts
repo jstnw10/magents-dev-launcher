@@ -48,7 +48,7 @@ function serverInfoPath(workspacePath: string): string {
 }
 
 function conversationLogPath(workspacePath: string, agentId: string): string {
-  return path.join(workspacePath, ".workspace", "agents", `${agentId}.json`);
+  return path.join(workspacePath, ".workspace", "opencode", "conversations", `${agentId}.json`);
 }
 
 function extractAgentIdFromPath(pathname: string): string | null {
@@ -310,20 +310,9 @@ export class AgentServer {
         const conversation = await this.manager.getConversation(this.workspacePath, agentId);
         const metadata = await this.manager.getAgent(this.workspacePath, agentId);
 
-        // Also check for conversation log written by agent-server (new format)
-        const logPath = conversationLogPath(this.workspacePath, agentId);
-        const logFile = Bun.file(logPath);
-        let serverLog: { id: string; metadata: Record<string, unknown>; messages: Array<Record<string, unknown>> } | null = null;
-        try {
-          if (await logFile.exists()) {
-            serverLog = await logFile.json();
-          }
-        } catch {
-          // Ignore parse errors
-        }
-
-        // Prefer server log messages (new format with contentBlocks), fall back to manager conversation (old format with parts)
-        const sourceMessages = serverLog?.messages ?? conversation.messages;
+        // Both agent-server and agent-manager now write to the same path,
+        // so we can use the manager's conversation directly.
+        const sourceMessages = conversation.messages;
 
         // Transform to the format the Swift client expects
         const response = {

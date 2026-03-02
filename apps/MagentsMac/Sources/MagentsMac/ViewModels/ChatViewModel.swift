@@ -60,6 +60,14 @@ final class ChatViewModel {
                 guard !Task.isCancelled else { break }
                 await self.handleFrame(frame)
             }
+            // Stream ended (WebSocket disconnected) — clean up loading state
+            guard let self else { return }
+            if self.isLoading {
+                if !self.streamingParts.isEmpty {
+                    self.finalizeStreamingMessage()
+                }
+                self.isLoading = false
+            }
         }
 
         print("[ChatVM] WebSocket connected for agent \(agentId)")
@@ -139,10 +147,16 @@ final class ChatViewModel {
             self.finalizeStreamingMessage()
 
         case .error(let message):
+            if !streamingParts.isEmpty {
+                finalizeStreamingMessage()
+            }
             self.error = message
             self.isLoading = false
 
         case .idle:
+            if !streamingParts.isEmpty {
+                finalizeStreamingMessage()
+            }
             self.isLoading = false
         }
     }

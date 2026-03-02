@@ -484,7 +484,7 @@ describe("AgentServer", () => {
       ws.close();
 
       // Verify conversation file was written
-      const convPath = path.join(flowWorkspace, ".workspace", "agents", `${created.agentId}.json`);
+      const convPath = path.join(flowWorkspace, ".workspace", "opencode", "conversations", `${created.agentId}.json`);
       const convFile = Bun.file(convPath);
       expect(await convFile.exists()).toBe(true);
 
