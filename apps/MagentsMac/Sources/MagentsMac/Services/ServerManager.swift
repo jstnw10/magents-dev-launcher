@@ -244,8 +244,8 @@ final class ServerManager {
         // Find bun binary
         let bunPath = try await findBunBinary()
 
-        // Find the CLI entry point relative to the app or workspace
-        let cliPath = try findCliEntryPoint()
+        // Find the CLI entry point (resolved to absolute path)
+        let cliPath = try await findCliEntryPoint(workspacePath: workspacePath)
 
         // Allocate port for agent-manager
         var port = nextPort
@@ -348,26 +348,47 @@ final class ServerManager {
         return path
     }
 
-    private func findCliEntryPoint() throws -> String {
-        // 1. Check ~/.magents/config.json for cliPath
-        let home = Foundation.FileManager.default.homeDirectoryForCurrentUser.path
+    private func findCliEntryPoint(workspacePath: String) async throws -> String {
+        let fm = Foundation.FileManager.default
+
+        // 1. Check ~/.magents/config.json for cliPath (already absolute)
+        let home = fm.homeDirectoryForCurrentUser.path
         let configPath = "\(home)/.magents/config.json"
-        if Foundation.FileManager.default.fileExists(atPath: configPath),
+        if fm.fileExists(atPath: configPath),
            let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
            let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let path = config["cliPath"] as? String,
-           Foundation.FileManager.default.fileExists(atPath: path) {
+           fm.fileExists(atPath: path) {
             return path
         }
 
-        // 2. Check common relative paths from the repo root
+        // 2. Try to find the CLI relative to the workspace path (absolute paths)
+        //    The workspace might BE the repo root, or be nested inside it
+        let wsURL = URL(fileURLWithPath: workspacePath)
         let candidates = [
-            "apps/magents-cli/src/cli.ts",
-            "../magents-cli/src/cli.ts",
+            // Workspace IS the repo root
+            "\(workspacePath)/apps/magents-cli/src/cli.ts",
+            // Workspace is one level inside the repo (e.g. worktree)
+            wsURL.deletingLastPathComponent().path + "/apps/magents-cli/src/cli.ts",
+            // Workspace is two levels inside (e.g. workspaces/<id>/<repo>)
+            wsURL.deletingLastPathComponent().deletingLastPathComponent().path + "/apps/magents-cli/src/cli.ts",
         ]
         for candidate in candidates {
-            if Foundation.FileManager.default.fileExists(atPath: candidate) {
+            if fm.fileExists(atPath: candidate) {
                 return candidate
+            }
+        }
+
+        // 3. Try `git rev-parse --show-toplevel` to find the repo root
+        let result = try await ShellRunner.run(
+            "git rev-parse --show-toplevel",
+            workingDirectory: workspacePath
+        )
+        if result.exitCode == 0 {
+            let repoRoot = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            let gitCandidate = "\(repoRoot)/apps/magents-cli/src/cli.ts"
+            if fm.fileExists(atPath: gitCandidate) {
+                return gitCandidate
             }
         }
 
