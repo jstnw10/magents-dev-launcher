@@ -16,6 +16,7 @@ final class WorkspaceViewModel {
     private var workspaceWebSocketTasks: [String: Task<Void, Never>] = [:]
     private var reconnectTasks: [String: Task<Void, Never>] = [:]
     private var reconnectAttempts: [String: Int] = [:]
+    private var restartCounts: [String: Int] = [:]
 
     // Agent status tracking
     var agentStatuses: [String: AgentStatus] = [:]
@@ -137,10 +138,11 @@ final class WorkspaceViewModel {
             do {
                 let message = try await wsTask.receive()
 
-                // Reset backoff after first successful message
+                // Reset backoff and restart counts after first successful message
                 if !didReceiveMessage {
                     didReceiveMessage = true
                     reconnectAttempts[workspaceId] = 0
+                    restartCounts[workspaceId] = 0
                 }
 
                 switch message {
@@ -184,9 +186,28 @@ final class WorkspaceViewModel {
 
         let attempts = reconnectAttempts[workspaceId] ?? 0
 
-        // Stop reconnecting after too many failures
+        // After 10 failed reconnect attempts, restart the agent-server (up to 2 times)
         if attempts >= 10 {
-            print("[WorkspaceVM] Max reconnect attempts (10) reached for \(workspaceId) — giving up")
+            let restarts = restartCounts[workspaceId] ?? 0
+            if restarts >= 2 {
+                print("[WorkspaceVM] Max reconnect attempts reached after \(restarts) restarts for \(workspaceId) — giving up")
+                return
+            }
+
+            print("[WorkspaceVM] Max reconnect attempts (10) reached for \(workspaceId) — restarting agent-server (restart \(restarts + 1)/2)")
+            reconnectAttempts[workspaceId] = 0
+            restartCounts[workspaceId] = restarts + 1
+
+            reconnectTasks[workspaceId] = Task { [weak self] in
+                guard let self else { return }
+                await serverManager.restartAgentManager(workspacePath: workspacePath)
+
+                // Wait for the new server to be ready
+                try? await Task.sleep(for: .seconds(2))
+
+                guard let workspace = self.workspaces.first(where: { $0.id == workspaceId }) else { return }
+                await self.connectWorkspaceEvents(for: workspace, serverManager: serverManager)
+            }
             return
         }
 

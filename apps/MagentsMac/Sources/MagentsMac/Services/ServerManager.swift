@@ -215,6 +215,30 @@ final class ServerManager {
 
     // MARK: - Agent Manager
 
+    /// Restarts the agent-manager for a workspace by killing the existing process,
+    /// cleaning up stale state, and starting fresh.
+    func restartAgentManager(workspacePath: String) async {
+        // 1. Kill existing process if we have one
+        if let process = agentManagerProcesses[workspacePath], process.isRunning {
+            process.terminate()
+        }
+        agentManagerProcesses[workspacePath] = nil
+
+        // 2. Delete stale server.json
+        let serverJsonPath = "\(workspacePath)/.workspace/agent-manager/server.json"
+        try? Foundation.FileManager.default.removeItem(atPath: serverJsonPath)
+
+        // 3. Clear cached info
+        agentManagerInfo[workspacePath] = nil
+
+        // 4. Get OpenCode URL from server status and restart
+        if case .running(let info) = serverStatus[workspacePath] {
+            await ensureAgentManager(workspacePath: workspacePath, openCodeURL: info.url)
+        }
+
+        print("[ServerManager] Agent-manager restarted for \(workspacePath)")
+    }
+
     /// Ensures the agent-manager server is running for the workspace.
     private func ensureAgentManager(workspacePath: String, openCodeURL: String) async {
         // Check if already running in-memory
