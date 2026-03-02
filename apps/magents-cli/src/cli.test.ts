@@ -1006,6 +1006,10 @@ describe("CLI agent commands", () => {
       createManager(_serverUrl: string) {
         return mockManager;
       },
+      createAgentServer: () => ({
+        start: async () => createMockServerInfo(),
+        stop: async () => {},
+      }),
     };
     const deps = { ...base.deps, agentDeps };
 
@@ -1040,6 +1044,10 @@ describe("CLI agent commands", () => {
       createManager(_serverUrl: string) {
         return mockManager;
       },
+      createAgentServer: () => ({
+        start: async () => createMockServerInfo(),
+        stop: async () => {},
+      }),
     };
     const deps = { ...base.deps, agentDeps };
 
