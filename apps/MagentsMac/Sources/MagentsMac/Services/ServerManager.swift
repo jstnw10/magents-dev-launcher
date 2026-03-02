@@ -353,7 +353,40 @@ final class ServerManager {
         let home = fm.homeDirectoryForCurrentUser.path
         print("[ServerManager] findCliEntryPoint: workspacePath = \(workspacePath)")
 
-        // 1. Check ~/.magents/config.json for cliPath (explicit config — highest priority)
+        // 0. Check workspace .env file for MAGENTS_CLI_PATH (per-workspace override)
+        let envPaths = [
+            "\(workspacePath)/.env",
+            "\(workspacePath)/.workspace/.env",
+            URL(fileURLWithPath: workspacePath).deletingLastPathComponent().path + "/.env",
+        ]
+        for envPath in envPaths {
+            if fm.fileExists(atPath: envPath),
+               let contents = try? String(contentsOfFile: envPath, encoding: .utf8) {
+                for line in contents.components(separatedBy: .newlines) {
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    if trimmed.hasPrefix("MAGENTS_CLI_PATH=") {
+                        var value = String(trimmed.dropFirst("MAGENTS_CLI_PATH=".count))
+                        // Remove surrounding quotes if present
+                        if (value.hasPrefix("\"") && value.hasSuffix("\"")) ||
+                           (value.hasPrefix("'") && value.hasSuffix("'")) {
+                            value = String(value.dropFirst().dropLast())
+                        }
+                        // Expand ~ to home directory
+                        if value.hasPrefix("~") {
+                            value = value.replacingOccurrences(of: "~", with: home, options: [], range: value.startIndex..<value.index(after: value.startIndex))
+                        }
+                        if fm.fileExists(atPath: value) {
+                            print("[ServerManager] Found CLI via .env: \(value)")
+                            return value
+                        } else {
+                            print("[ServerManager] .env MAGENTS_CLI_PATH set but file not found: \(value)")
+                        }
+                    }
+                }
+            }
+        }
+
+        // 1. Check ~/.magents/config.json for cliPath (global fallback)
         let configPath = "\(home)/.magents/config.json"
         if fm.fileExists(atPath: configPath),
            let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
@@ -407,7 +440,9 @@ final class ServerManager {
             }
         }
 
-        print("[ServerManager] ERROR: Could not find magents CLI. Set cliPath in ~/.magents/config.json")
+        print("[ServerManager] ERROR: Could not find magents CLI.")
+        print("[ServerManager] Fix: Create .env in your workspace with:")
+        print("[ServerManager]   MAGENTS_CLI_PATH=/path/to/magents-dev-launcher/apps/magents-cli/src/cli.ts")
         throw ServerManagerError.cliNotFound
     }
 
