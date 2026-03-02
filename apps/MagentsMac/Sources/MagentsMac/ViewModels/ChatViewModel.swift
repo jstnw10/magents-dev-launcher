@@ -35,6 +35,7 @@ final class ChatViewModel {
     private var agentManagerClient: AgentManagerClient?
     private var webSocketTask: Task<Void, Never>?
     private var loadingTimeoutTask: Task<Void, Never>?
+    private var hasReceivedStreamingEvents: Bool = false
 
     /// Timeout duration in seconds before loading state is cleared with an error.
     private let loadingTimeoutSeconds: UInt64 = 60
@@ -101,14 +102,21 @@ final class ChatViewModel {
                 return // Task was cancelled
             }
             guard !Task.isCancelled else { return }
-            // Timeout fired — clear loading state and show error
+            // Timeout fired
             if self.isLoading {
-                if !self.streamingParts.isEmpty {
-                    self.finalizeStreamingMessage()
+                if self.hasReceivedStreamingEvents {
+                    // Events have been received — agent is working, just slowly. Restart the timeout.
+                    print("[ChatVM] ⏳ Loading timeout fired but streaming events were received — restarting timeout for agent \(self.agentId)")
+                    self.startLoadingTimeout()
+                } else {
+                    // No events received at all — clear loading state and show error
+                    if !self.streamingParts.isEmpty {
+                        self.finalizeStreamingMessage()
+                    }
+                    self.isLoading = false
+                    self.error = "No response received. The agent may be busy — try again."
+                    print("[ChatVM] ⚠️ Loading timeout fired after \(self.loadingTimeoutSeconds)s — no streaming events received for agent \(self.agentId)")
                 }
-                self.isLoading = false
-                self.error = "No response received. The agent may be busy — try again."
-                print("[ChatVM] ⚠️ Loading timeout fired after \(self.loadingTimeoutSeconds)s — no streaming events received for agent \(self.agentId)")
             }
         }
     }
@@ -125,6 +133,7 @@ final class ChatViewModel {
         switch frame {
         case .messageStart(let messageId):
             // Activity received — reset timeout
+            hasReceivedStreamingEvents = true
             startLoadingTimeout()
             // If there's already a streaming message, finalize it first
             if !streamingParts.isEmpty {
@@ -135,6 +144,7 @@ final class ChatViewModel {
 
         case .delta(let partId, let field, let delta):
             // Activity received — reset timeout
+            hasReceivedStreamingEvents = true
             startLoadingTimeout()
             guard let assistantId = self.assistantMessageId else { break }
             if var part = self.streamingParts[partId] {
@@ -155,6 +165,7 @@ final class ChatViewModel {
 
         case .partUpdated(let partId, let partWrapper):
             // Activity received — reset timeout
+            hasReceivedStreamingEvents = true
             startLoadingTimeout()
             guard let assistantId = self.assistantMessageId else { break }
             let partDict = partWrapper.value
@@ -327,6 +338,7 @@ final class ChatViewModel {
         streamingPartOrder = []
         assistantMessageId = nil
         error = nil
+        hasReceivedStreamingEvents = false
 
         // Start loading timeout
         startLoadingTimeout()
@@ -348,6 +360,13 @@ final class ChatViewModel {
         guard !answer.isEmpty else { return }
         print("[ChatVM] Submitting question answer: \(answer.prefix(50))...")
 
+        // Finalize the streaming message (containing the question tool) so it appears
+        // in `messages` before the user's answer. This ensures correct ordering:
+        // question bubble → answer bubble.
+        if !streamingParts.isEmpty {
+            finalizeStreamingMessage()
+        }
+
         let userMessage = ConversationMessage(
             role: .user,
             content: answer,
@@ -358,10 +377,10 @@ final class ChatViewModel {
         )
         messages.append(userMessage)
         isLoading = true
-        // Do NOT clear streamingParts, streamingPartOrder, or assistantMessageId here.
-        // The existing streaming message (with the question tool) should remain visible
-        // while the answer is being processed. The natural streaming flow (handleFrame →
-        // finalizeStreamingMessage) will handle the transition when the server responds.
+        // Clear streaming state so the next server response starts fresh.
+        streamingParts = [:]
+        streamingPartOrder = []
+        assistantMessageId = nil
         error = nil
 
         // Start loading timeout
