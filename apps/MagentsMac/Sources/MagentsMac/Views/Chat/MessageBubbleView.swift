@@ -19,14 +19,20 @@ struct MessageBubbleView: View {
 
                 // Bubble
                 if isUser || message.parts.isEmpty {
-                    // User messages or messages without parts: show plain content
-                    Text(message.content)
-                        .textSelection(.enabled)
-                        .padding(10)
-                        .background {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(isUser ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.1))
+                    // User messages or messages without parts
+                    Group {
+                        if isUser {
+                            Text(message.content)
+                                .textSelection(.enabled)
+                        } else {
+                            MarkdownTextView(text: message.content)
                         }
+                    }
+                    .padding(10)
+                    .background {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(isUser ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.1))
+                    }
                 } else {
                     // Assistant messages with parts: render each part
                     VStack(alignment: .leading, spacing: 6) {
@@ -34,8 +40,7 @@ struct MessageBubbleView: View {
                             switch part.type {
                             case .text:
                                 if let text = part.text, !text.isEmpty {
-                                    Text(text)
-                                        .textSelection(.enabled)
+                                    MarkdownTextView(text: text)
                                 }
                             case .reasoning:
                                 ReasoningView(part: part)
