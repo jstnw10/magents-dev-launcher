@@ -7,42 +7,136 @@ struct MessageBubbleView: View {
     /// Optional callback for answering interactive question tools.
     var onQuestionAnswer: ((String, [[String]]) -> Void)?
 
-    /// Pre-processed display items computed from message parts, grouping content
-    /// between stepStart/stepFinish into collapsible sections.
+    // Regex patterns for group tags in text content
+    private static let groupOpenPattern = try! NSRegularExpression(pattern: #"<group:([^>]+)>"#)
+    private static let groupClosePattern = try! NSRegularExpression(pattern: #"</group(?::[^>]*)?>"#)
+
+    /// Pre-processed display items computed from message parts, parsing
+    /// `<group:Name>` / `</group>` tags from text content into collapsible sections.
     private var displayItems: [DisplayItem] {
         var items: [DisplayItem] = []
-        var i = 0
         let parts = message.parts
 
-        while i < parts.count {
-            let part = parts[i]
-            if part.type == .stepStart {
-                let groupName = part.text ?? "Group"
-                var groupParts: [MessagePart] = []
-                var isClosed = false
-                i += 1
-                while i < parts.count {
-                    if parts[i].type == .stepFinish {
-                        isClosed = true
-                        i += 1
-                        break
-                    }
-                    if parts[i].type == .stepStart {
-                        // Nested group start — don't consume, let outer loop handle
-                        break
-                    }
-                    groupParts.append(parts[i])
-                    i += 1
+        // State for tracking an open group
+        var currentGroupName: String? = nil
+        var currentGroupParts: [MessagePart] = []
+
+        for part in parts {
+            // stepStart/stepFinish are OpenCode wrappers — skip them entirely
+            if part.type == .stepStart || part.type == .stepFinish {
+                continue
+            }
+
+            // Only text parts can contain group tags
+            guard part.type == .text, let text = part.text else {
+                // Non-text part: add to current group or as single
+                if currentGroupName != nil {
+                    currentGroupParts.append(part)
+                } else {
+                    items.append(.single(part: part))
                 }
-                items.append(.group(name: groupName, parts: groupParts, isClosed: isClosed))
-            } else if part.type == .stepFinish {
-                // Orphan stepFinish — skip
-                i += 1
-            } else {
-                items.append(.single(part: part))
-                i += 1
+                continue
+            }
+
+            // Scan text for group open/close tags and split accordingly
+            let nsText = text as NSString
+            let fullRange = NSRange(location: 0, length: nsText.length)
+
+            // Find all group open and close tags with their positions
+            enum TagKind { case open(String), close }
+            struct TagMatch {
+                let kind: TagKind
+                let range: NSRange
+            }
+
+            var tags: [TagMatch] = []
+            for match in Self.groupOpenPattern.matches(in: text, range: fullRange) {
+                let name = nsText.substring(with: match.range(at: 1))
+                tags.append(TagMatch(kind: .open(name), range: match.range))
+            }
+            for match in Self.groupClosePattern.matches(in: text, range: fullRange) {
+                tags.append(TagMatch(kind: .close, range: match.range))
+            }
+            tags.sort { $0.range.location < $1.range.location }
+
+            if tags.isEmpty {
+                // No tags in this text part — add whole part to group or as single
+                if currentGroupName != nil {
+                    currentGroupParts.append(part)
+                } else {
+                    items.append(.single(part: part))
+                }
+                continue
+            }
+
+            // Process text segments between tags
+            var cursor = 0
+            for tag in tags {
+                let beforeEnd = tag.range.location
+                // Text before this tag
+                if beforeEnd > cursor {
+                    let segment = nsText.substring(with: NSRange(location: cursor, length: beforeEnd - cursor))
+                    let trimmed = segment.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        let segmentPart = MessagePart(
+                            id: "\(part.id)-seg\(cursor)",
+                            messageID: part.messageID,
+                            type: .text,
+                            text: segment
+                        )
+                        if currentGroupName != nil {
+                            currentGroupParts.append(segmentPart)
+                        } else {
+                            items.append(.single(part: segmentPart))
+                        }
+                    }
+                }
+
+                switch tag.kind {
+                case .open(let name):
+                    // If there's already an open group, close it first (unclosed)
+                    if let existingName = currentGroupName {
+                        items.append(.group(name: existingName, parts: currentGroupParts, isClosed: false))
+                        currentGroupParts = []
+                    }
+                    currentGroupName = name
+                case .close:
+                    if let groupName = currentGroupName {
+                        items.append(.group(name: groupName, parts: currentGroupParts, isClosed: true))
+                        currentGroupName = nil
+                        currentGroupParts = []
+                    }
+                    // Orphan close tag without open — just skip
+                }
+
+                cursor = tag.range.location + tag.range.length
+            }
+
+            // Text after the last tag
+            if cursor < nsText.length {
+                let remaining = nsText.substring(from: cursor)
+                let trimmed = remaining.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    let segmentPart = MessagePart(
+                        id: "\(part.id)-seg\(cursor)",
+                        messageID: part.messageID,
+                        type: .text,
+                        text: remaining
+                    )
+                    if currentGroupName != nil {
+                        currentGroupParts.append(segmentPart)
+                    } else {
+                        items.append(.single(part: segmentPart))
+                    }
+                }
             }
         }
+
+        // If a group is still open (streaming), emit it as unclosed
+        if let groupName = currentGroupName {
+            items.append(.group(name: groupName, parts: currentGroupParts, isClosed: false))
+        }
+
         return items
     }
 
@@ -153,7 +247,7 @@ struct MessageBubbleView: View {
 
 // MARK: - Display Item
 
-/// Represents either a single message part or a group of parts between stepStart/stepFinish.
+/// Represents either a single message part or a group of parts between `<group:Name>` / `</group>` tags.
 private enum DisplayItem {
     case single(part: MessagePart)
     case group(name: String, parts: [MessagePart], isClosed: Bool)
