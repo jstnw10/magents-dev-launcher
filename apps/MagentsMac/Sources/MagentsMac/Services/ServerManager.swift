@@ -379,7 +379,15 @@ final class ServerManager {
             }
         }
 
-        // 3. Try `git rev-parse --show-toplevel` to find the repo root
+        // 3. Check the original repository path from workspace.json
+        if let repoPath = readRepositoryPath(workspacePath: workspacePath) {
+            let repoCandidate = "\(repoPath)/apps/magents-cli/src/cli.ts"
+            if fm.fileExists(atPath: repoCandidate) {
+                return repoCandidate
+            }
+        }
+
+        // 4. Try `git rev-parse --show-toplevel` to find the repo root
         let result = try await ShellRunner.run(
             "git rev-parse --show-toplevel",
             workingDirectory: workspacePath
@@ -396,6 +404,17 @@ final class ServerManager {
     }
 
     // MARK: - Helpers
+
+    private func readRepositoryPath(workspacePath: String) -> String? {
+        let configPath = "\(workspacePath)/.workspace/workspace.json"
+        guard Foundation.FileManager.default.fileExists(atPath: configPath),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
+              let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let repoPath = config["repositoryPath"] as? String else {
+            return nil
+        }
+        return repoPath
+    }
 
     private nonisolated func isPIDAlive(_ pid: Int) -> Bool {
         kill(Int32(pid), 0) == 0
