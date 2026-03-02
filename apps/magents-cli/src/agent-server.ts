@@ -419,6 +419,9 @@ export class AgentServer {
     // Immediately persist user message to conversation log
     await this.persistUserMessage(agentId, text);
 
+    // Subscribe to SSE BEFORE the POST so we don't miss early events
+    this.ensureSSESubscription(agentId, session);
+
     // POST message to OpenCode and check response
     const postUrl = `${this.openCodeUrl}/session/${session.sessionId}/message`;
     try {
@@ -445,8 +448,6 @@ export class AgentServer {
       return;
     }
 
-    // Subscribe to SSE if not already subscribed
-    this.ensureSSESubscription(agentId, session);
   }
 
   /**
