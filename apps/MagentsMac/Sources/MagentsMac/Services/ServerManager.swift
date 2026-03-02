@@ -350,6 +350,7 @@ final class ServerManager {
 
     private func findCliEntryPoint(workspacePath: String) async throws -> String {
         let fm = Foundation.FileManager.default
+        print("[ServerManager] findCliEntryPoint: workspacePath = \(workspacePath)")
 
         // 1. Check ~/.magents/config.json for cliPath (already absolute)
         let home = fm.homeDirectoryForCurrentUser.path
@@ -357,9 +358,11 @@ final class ServerManager {
         if fm.fileExists(atPath: configPath),
            let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
            let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let path = config["cliPath"] as? String,
-           fm.fileExists(atPath: path) {
-            return path
+           let path = config["cliPath"] as? String {
+            print("[ServerManager] Config cliPath: \(path) — exists: \(fm.fileExists(atPath: path))")
+            if fm.fileExists(atPath: path) {
+                return path
+            }
         }
 
         // 2. Try to find the CLI relative to the workspace path (absolute paths)
@@ -374,20 +377,56 @@ final class ServerManager {
             wsURL.deletingLastPathComponent().deletingLastPathComponent().path + "/apps/magents-cli/src/cli.ts",
         ]
         for candidate in candidates {
+            print("[ServerManager] Checking CLI candidate: \(candidate) — exists: \(fm.fileExists(atPath: candidate))")
             if fm.fileExists(atPath: candidate) {
                 return candidate
             }
         }
 
-        // 3. Check the original repository path from workspace.json
-        if let repoPath = readRepositoryPath(workspacePath: workspacePath) {
-            let repoCandidate = "\(repoPath)/apps/magents-cli/src/cli.ts"
-            if fm.fileExists(atPath: repoCandidate) {
-                return repoCandidate
+        // 3. Check workspace.json for worktreePath and repositoryPath
+        let wsJsonCandidates = [
+            "\(workspacePath)/.workspace/workspace.json",
+            wsURL.deletingLastPathComponent().path + "/.workspace/workspace.json",
+        ]
+        for wsJsonPath in wsJsonCandidates {
+            print("[ServerManager] Checking workspace.json: \(wsJsonPath) — exists: \(fm.fileExists(atPath: wsJsonPath))")
+            if fm.fileExists(atPath: wsJsonPath),
+               let data = try? Data(contentsOf: URL(fileURLWithPath: wsJsonPath)),
+               let wsConfig = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+
+                // Check worktreePath first (has our branch's code)
+                if let worktreePath = wsConfig["worktreePath"] as? String {
+                    let wtCandidate = "\(worktreePath)/apps/magents-cli/src/cli.ts"
+                    print("[ServerManager] Checking worktreePath candidate: \(wtCandidate) — exists: \(fm.fileExists(atPath: wtCandidate))")
+                    if fm.fileExists(atPath: wtCandidate) {
+                        return wtCandidate
+                    }
+                }
+
+                // Then check repositoryPath (original repo)
+                if let repoPath = wsConfig["repositoryPath"] as? String {
+                    let repoCandidate = "\(repoPath)/apps/magents-cli/src/cli.ts"
+                    print("[ServerManager] Checking repositoryPath candidate: \(repoCandidate) — exists: \(fm.fileExists(atPath: repoCandidate))")
+                    if fm.fileExists(atPath: repoCandidate) {
+                        return repoCandidate
+                    }
+                }
             }
         }
 
-        // 4. Try `git rev-parse --show-toplevel` to find the repo root
+        // 4. Scan subdirectories of workspacePath for the CLI
+        //    The workspace root often contains the repo as a subdirectory
+        if let contents = try? fm.contentsOfDirectory(atPath: workspacePath) {
+            for item in contents where !item.hasPrefix(".") {
+                let subCandidate = "\(workspacePath)/\(item)/apps/magents-cli/src/cli.ts"
+                print("[ServerManager] Checking subdirectory candidate: \(subCandidate) — exists: \(fm.fileExists(atPath: subCandidate))")
+                if fm.fileExists(atPath: subCandidate) {
+                    return subCandidate
+                }
+            }
+        }
+
+        // 5. Try `git rev-parse --show-toplevel` to find the repo root
         let result = try await ShellRunner.run(
             "git rev-parse --show-toplevel",
             workingDirectory: workspacePath
@@ -395,25 +434,44 @@ final class ServerManager {
         if result.exitCode == 0 {
             let repoRoot = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
             let gitCandidate = "\(repoRoot)/apps/magents-cli/src/cli.ts"
+            print("[ServerManager] Checking git toplevel candidate: \(gitCandidate) — exists: \(fm.fileExists(atPath: gitCandidate))")
             if fm.fileExists(atPath: gitCandidate) {
                 return gitCandidate
             }
         }
 
+        print("[ServerManager] ERROR: Could not find CLI entry point from workspacePath: \(workspacePath)")
         throw ServerManagerError.cliNotFound
     }
 
     // MARK: - Helpers
 
     private func readRepositoryPath(workspacePath: String) -> String? {
-        let configPath = "\(workspacePath)/.workspace/workspace.json"
-        guard Foundation.FileManager.default.fileExists(atPath: configPath),
-              let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
-              let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let repoPath = config["repositoryPath"] as? String else {
-            return nil
+        let fm = Foundation.FileManager.default
+
+        // Check at workspacePath level and parent level
+        let candidates = [
+            "\(workspacePath)/.workspace/workspace.json",
+            URL(fileURLWithPath: workspacePath).deletingLastPathComponent().path + "/.workspace/workspace.json",
+        ]
+
+        for configPath in candidates {
+            if fm.fileExists(atPath: configPath),
+               let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
+               let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                // Try worktreePath first — this points to the actual checkout with our code
+                if let worktreePath = config["worktreePath"] as? String {
+                    print("[ServerManager] Found worktreePath: \(worktreePath) from \(configPath)")
+                    return worktreePath
+                }
+                // Then try repositoryPath
+                if let repoPath = config["repositoryPath"] as? String {
+                    print("[ServerManager] Found repositoryPath: \(repoPath) from \(configPath)")
+                    return repoPath
+                }
+            }
         }
-        return repoPath
+        return nil
     }
 
     private nonisolated func isPIDAlive(_ pid: Int) -> Bool {
