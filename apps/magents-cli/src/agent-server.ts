@@ -416,23 +416,95 @@ export class AgentServer {
     session.turnMessageCount = 0;
     session.completedMessages = [];
 
-    // Fire-and-forget POST to OpenCode
+    // Immediately persist user message to conversation log
+    await this.persistUserMessage(agentId, text);
+
+    // POST message to OpenCode and check response
     const postUrl = `${this.openCodeUrl}/session/${session.sessionId}/message`;
     try {
-      fetch(postUrl, {
+      const res = await fetch(postUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ parts }),
-      }).catch(() => {
-        // Error will surface via SSE or timeout
       });
-    } catch {
-      this.broadcastToAgent(agentId, { type: "error", message: "Failed to send message to OpenCode" });
+
+      if (!res.ok) {
+        const statusText = res.statusText || `HTTP ${res.status}`;
+        const isBusy = res.status === 409 || res.status === 429;
+        const errorMessage = isBusy
+          ? `Session is busy — please wait for the current response to finish (${statusText})`
+          : `Failed to send message: ${statusText}`;
+        this.broadcastToAgent(agentId, { type: "error", message: errorMessage });
+        return;
+      }
+    } catch (err) {
+      this.broadcastToAgent(agentId, {
+        type: "error",
+        message: `Failed to send message to OpenCode: ${(err as Error).message}`,
+      });
       return;
     }
 
     // Subscribe to SSE if not already subscribed
     this.ensureSSESubscription(agentId, session);
+  }
+
+  /**
+   * Immediately persist user message to conversation log.
+   * This ensures the message survives even if the POST fails or session crashes.
+   * The logConversation method's deduplication logic (lines 739-746) will handle
+   * removing this entry when the full turn is logged.
+   */
+  private async persistUserMessage(agentId: string, text: string): Promise<void> {
+    const now = new Date().toISOString();
+    const logPath = conversationLogPath(this.workspacePath, agentId);
+
+    let conversationLog: {
+      id: string;
+      metadata: Record<string, unknown>;
+      messages: Array<Record<string, unknown>>;
+    };
+
+    try {
+      const file = Bun.file(logPath);
+      if (await file.exists()) {
+        conversationLog = await file.json();
+      } else {
+        const metadata = await this.manager.getAgent(this.workspacePath, agentId);
+        conversationLog = {
+          id: agentId,
+          metadata: {
+            label: metadata.label,
+            specialistId: metadata.specialistId,
+            model: metadata.model,
+          },
+          messages: [],
+        };
+      }
+    } catch {
+      const metadata = await this.manager.getAgent(this.workspacePath, agentId);
+      conversationLog = {
+        id: agentId,
+        metadata: {
+          label: metadata.label,
+          specialistId: metadata.specialistId,
+          model: metadata.model,
+        },
+        messages: [],
+      };
+    }
+
+    // Append user message
+    conversationLog.messages.push({
+      id: `msg_user_${Date.now()}`,
+      role: "user",
+      contentBlocks: [{ type: "text", text }],
+      timestamp: now,
+    });
+
+    const dir = path.dirname(logPath);
+    await mkdir(dir, { recursive: true });
+    await Bun.write(logPath, `${JSON.stringify(conversationLog, null, 2)}\n`);
   }
 
   // --- SSE Subscription ---
