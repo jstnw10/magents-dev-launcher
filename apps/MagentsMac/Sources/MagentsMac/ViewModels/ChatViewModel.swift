@@ -134,6 +134,10 @@ final class ChatViewModel {
                     part.toolOutput = state["output"] as? String
                     if let input = state["input"] {
                         part.toolInput = stringifyJSON(input)
+                        // Store structured data for interactive tools (e.g. question)
+                        if let inputDict = input as? [String: Any] {
+                            part.toolInputData = inputDict
+                        }
                     }
                 }
             }
@@ -222,6 +226,10 @@ final class ChatViewModel {
                         part.toolOutput = block.content
                         if let input = block.input {
                             part.toolInput = stringifyJSON(input.value)
+                            // Restore structured data for interactive tools
+                            if let inputDict = input.value as? [String: Any] {
+                                part.toolInputData = inputDict
+                            }
                         }
                     }
 
@@ -275,6 +283,35 @@ final class ChatViewModel {
 
         // Send message via WebSocket
         agentManagerClient?.sendMessage(text)
+    }
+
+    // MARK: - Submit Question Answer
+
+    /// Submit an answer to an interactive question tool.
+    /// This sends the answer as a regular user message through the WebSocket.
+    func submitQuestionAnswer(_ answer: String, serverManager: ServerManager) async {
+        guard !answer.isEmpty else { return }
+
+        let userMessage = ConversationMessage(
+            role: .user,
+            content: answer,
+            parts: [],
+            timestamp: ISO8601DateFormatter().string(from: Date()),
+            tokens: nil,
+            cost: nil
+        )
+        messages.append(userMessage)
+        isLoading = true
+        streamingParts = [:]
+        streamingPartOrder = []
+        assistantMessageId = nil
+        error = nil
+
+        if agentManagerClient == nil {
+            await connectWebSocket(serverManager: serverManager)
+        }
+
+        agentManagerClient?.sendMessage(answer)
     }
 
     // MARK: - Cancel Streaming

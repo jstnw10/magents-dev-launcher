@@ -27,7 +27,7 @@ enum ToolStatus: String, Codable, Sendable {
     case error
 }
 
-struct MessagePart: Identifiable, Sendable {
+struct MessagePart: Identifiable, @unchecked Sendable {
     let id: String
     let messageID: String
     let type: MessagePartType
@@ -42,6 +42,8 @@ struct MessagePart: Identifiable, Sendable {
     var toolTitle: String?
     var toolInput: String?
     var toolOutput: String?
+    /// Raw structured input data for interactive tools (e.g. question tool).
+    var toolInputData: [String: Any]?
 }
 
 struct ConversationMessage: Identifiable, Sendable {
