@@ -165,8 +165,10 @@ struct MessageBubbleView: View {
                     }
                     .padding(10)
                     .background {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(isUser ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.1))
+                        if isUser {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.15))
+                        }
                     }
                 } else {
                     // Assistant messages with parts: render each part or group
@@ -198,10 +200,6 @@ struct MessageBubbleView: View {
                         }
                     }
                     .padding(10)
-                    .background {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.secondary.opacity(0.1))
-                    }
                 }
 
                 // Metadata row

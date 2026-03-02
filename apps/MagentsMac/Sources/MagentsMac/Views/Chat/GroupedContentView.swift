@@ -77,18 +77,7 @@ struct GroupedContentView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(Color.accentColor.opacity(0.08), lineWidth: 0.5)
         }
-        .onAppear {
-            // Closed groups default to collapsed, open groups default to expanded
-            isExpanded = !isClosed
-        }
-        .onChange(of: isClosed) { _, newValue in
-            if newValue {
-                // When group closes, collapse it
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isExpanded = false
-                }
-            }
-        }
+
     }
 }
 
