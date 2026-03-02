@@ -30,6 +30,7 @@ struct ChatView: View {
                             let streamingParts = viewModel.streamingPartOrder.compactMap { viewModel.streamingParts[$0] }
                             MessageBubbleView(
                                 message: ConversationMessage(
+                                    id: "streaming",
                                     role: .assistant,
                                     content: viewModel.streamingText,
                                     parts: streamingParts,

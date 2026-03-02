@@ -241,6 +241,7 @@ final class ChatViewModel {
         let finalParts = streamingPartOrder.compactMap { streamingParts[$0] }
         let finalText = streamingText.isEmpty ? "(No response received)" : streamingText
         let assistantMessage = ConversationMessage(
+            id: UUID().uuidString,
             role: .assistant,
             content: finalText,
             parts: finalParts,
@@ -310,6 +311,7 @@ final class ChatViewModel {
                 guard !textContent.isEmpty || hasToolParts else { return nil }
 
                 return ConversationMessage(
+                    id: msg.id,
                     role: role,
                     content: textContent,
                     parts: messageParts,
@@ -331,6 +333,7 @@ final class ChatViewModel {
         guard !text.isEmpty else { return }
 
         let userMessage = ConversationMessage(
+            id: UUID().uuidString,
             role: .user,
             content: text,
             parts: [],
@@ -383,6 +386,7 @@ final class ChatViewModel {
         if !streamingParts.isEmpty {
             let finalParts = streamingPartOrder.compactMap { streamingParts[$0] }
             let assistantMessage = ConversationMessage(
+                id: UUID().uuidString,
                 role: .assistant,
                 content: streamingText,
                 parts: finalParts,
