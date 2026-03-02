@@ -4,7 +4,8 @@ import SwiftUI
 /// Renders questions with selectable option cards and a submit button.
 struct QuestionToolView: View {
     let inputData: [String: Any]
-    let onSubmit: (String) -> Void
+    let requestID: String
+    let onSubmit: (String, [[String]]) -> Void
 
     @State private var selections: [Int: Int] = [:]  // questionIndex → optionIndex
 
@@ -49,7 +50,7 @@ struct QuestionToolView: View {
                 HStack {
                     Spacer()
                     Button {
-                        onSubmit(formatAnswer())
+                        onSubmit(requestID, formatAnswer())
                     } label: {
                         Text("Submit")
                             .font(.callout)
@@ -144,14 +145,14 @@ struct QuestionToolView: View {
 
     // MARK: - Format Answer
 
-    private func formatAnswer() -> String {
-        questions.enumerated().compactMap { qIndex, question in
-            guard let optIndex = selections[qIndex] else { return nil }
+    private func formatAnswer() -> [[String]] {
+        questions.enumerated().map { qIndex, question in
+            guard let optIndex = selections[qIndex] else { return [] }
             let options = question["options"] as? [[String: Any]] ?? []
-            guard optIndex < options.count else { return nil }
+            guard optIndex < options.count else { return [] }
             let label = options[optIndex]["label"] as? String ?? "Option \(optIndex + 1)"
-            return questions.count > 1 ? "\(qIndex + 1). \(label)" : label
-        }.joined(separator: "\n")
+            return [label]
+        }
     }
 }
 

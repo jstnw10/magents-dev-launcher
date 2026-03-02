@@ -31,6 +31,9 @@ final class ChatViewModel {
     let sessionId: String
     let workspacePath: String
 
+    /// The request ID from the most recent `question.asked` WebSocket frame.
+    var pendingQuestionRequestID: String?
+
     private var assistantMessageId: String?
     private var agentManagerClient: AgentManagerClient?
     private var webSocketTask: Task<Void, Never>?
@@ -225,6 +228,10 @@ final class ChatViewModel {
                 finalizeStreamingMessage()
             }
             self.isLoading = false
+
+        case .questionAsked(let requestID, _):
+            print("[ChatVM] WS: question.asked requestID=\(requestID)")
+            self.pendingQuestionRequestID = requestID
         }
     }
 
@@ -354,44 +361,17 @@ final class ChatViewModel {
 
     // MARK: - Submit Question Answer
 
-    /// Submit an answer to an interactive question tool.
-    /// This sends the answer as a regular user message through the WebSocket.
-    func submitQuestionAnswer(_ answer: String, serverManager: ServerManager) async {
-        guard !answer.isEmpty else { return }
-        print("[ChatVM] Submitting question answer: \(answer.prefix(50))...")
-
-        // Finalize the streaming message (containing the question tool) so it appears
-        // in `messages` before the user's answer. This ensures correct ordering:
-        // question bubble → answer bubble.
-        if !streamingParts.isEmpty {
-            finalizeStreamingMessage()
-        }
-
-        let userMessage = ConversationMessage(
-            role: .user,
-            content: answer,
-            parts: [],
-            timestamp: ISO8601DateFormatter().string(from: Date()),
-            tokens: nil,
-            cost: nil
-        )
-        messages.append(userMessage)
-        isLoading = true
-        // Clear streaming state so the next server response starts fresh.
-        streamingParts = [:]
-        streamingPartOrder = []
-        assistantMessageId = nil
-        error = nil
-        hasReceivedStreamingEvents = false
-
-        // Start loading timeout
-        startLoadingTimeout()
+    /// Submit a structured answer to an interactive question tool via the Question API.
+    /// Sends a `question.reply` WebSocket frame instead of a regular user message.
+    func submitQuestionAnswer(answers: [[String]], requestID: String, serverManager: ServerManager) async {
+        print("[ChatVM] Submitting question reply for requestID=\(requestID)")
 
         if agentManagerClient == nil {
             await connectWebSocket(serverManager: serverManager)
         }
 
-        agentManagerClient?.sendMessage(answer)
+        agentManagerClient?.sendQuestionReply(requestID: requestID, answers: answers)
+        pendingQuestionRequestID = nil
     }
 
     // MARK: - Cancel Streaming

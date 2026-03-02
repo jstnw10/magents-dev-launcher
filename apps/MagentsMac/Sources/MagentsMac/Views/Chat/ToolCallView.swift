@@ -2,16 +2,19 @@ import SwiftUI
 
 struct ToolCallView: View {
     let part: MessagePart
+    /// The request ID from the question.asked WebSocket frame, needed for question replies.
+    var requestID: String?
     /// Optional callback for answering interactive tools (e.g. question tool).
-    var onQuestionAnswer: ((String) -> Void)?
+    var onQuestionAnswer: ((String, [[String]]) -> Void)?
     @State private var isExpanded = false
 
     var body: some View {
         // Interactive question tool
         if part.toolName == "question" && part.toolStatus == .running,
            let inputData = part.toolInputData,
+           let rid = requestID,
            let onAnswer = onQuestionAnswer {
-            QuestionToolView(inputData: inputData, onSubmit: onAnswer)
+            QuestionToolView(inputData: inputData, requestID: rid, onSubmit: onAnswer)
         } else if part.toolName == "question" && part.toolStatus == .completed,
                   let inputData = part.toolInputData {
             CompletedQuestionView(inputData: inputData)
