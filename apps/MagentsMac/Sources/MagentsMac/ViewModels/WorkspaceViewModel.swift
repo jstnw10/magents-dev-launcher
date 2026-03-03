@@ -96,12 +96,6 @@ final class WorkspaceViewModel {
         sessionsForWorkspace[workspace.id] ?? []
     }
 
-    /// Returns root sessions (no parentID) for a workspace
-    func rootSessions(for workspace: WorkspaceConfig) -> [SessionInfo] {
-        sessions(for: workspace).filter { $0.parentID == nil }
-            .sorted { $0.time.created > $1.time.created }
-    }
-
     /// Returns child sessions of a given parent
     func childSessions(parentId: String, for workspace: WorkspaceConfig) -> [SessionInfo] {
         sessions(for: workspace).filter { $0.parentID == parentId }

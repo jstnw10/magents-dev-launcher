@@ -97,17 +97,18 @@ struct SidebarView: View {
     @ViewBuilder
     private func workspaceDisclosure(_ workspace: WorkspaceConfig) -> some View {
         DisclosureGroup {
-            let rootSessions = viewModel.rootSessions(for: workspace)
+            let agents = viewModel.agents(for: workspace)
 
-            if rootSessions.isEmpty {
-                // Fallback to agent metadata if sessions haven't loaded
-                let agents = viewModel.agents(for: workspace)
-                if agents.isEmpty {
-                    Text("No agents")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(agents) { agent in
+            if agents.isEmpty {
+                Text("No agents")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(agents) { agent in
+                    let childSessions = viewModel.childSessions(parentId: agent.sessionId, for: workspace)
+
+                    if childSessions.isEmpty {
+                        // Agent with no sub-agents — show as simple row
                         AgentRow(agent: agent, workspacePath: workspace.path) {
                             viewModel.agentsForWorkspace[workspace.id] = nil
                             Task { await viewModel.loadAgents(for: workspace) }
@@ -122,22 +123,10 @@ struct SidebarView: View {
                                 workspaceId: workspace.id
                             ))
                         }
-                    }
-                }
-            } else {
-                // Session-based tree
-                ForEach(rootSessions) { rootSession in
-                    let children = viewModel.childSessions(parentId: rootSession.id, for: workspace)
-
-                    if children.isEmpty {
-                        SessionRow(
-                            session: rootSession,
-                            status: viewModel.sessionStatuses[rootSession.id],
-                            workspaceId: workspace.id
-                        )
                     } else {
+                        // Agent with sub-agents — show as disclosure group
                         DisclosureGroup {
-                            ForEach(children) { child in
+                            ForEach(childSessions) { child in
                                 SessionRow(
                                     session: child,
                                     status: viewModel.sessionStatuses[child.id],
@@ -145,11 +134,20 @@ struct SidebarView: View {
                                 )
                             }
                         } label: {
-                            SessionRow(
-                                session: rootSession,
-                                status: viewModel.sessionStatuses[rootSession.id],
-                                workspaceId: workspace.id
-                            )
+                            AgentRow(agent: agent, workspacePath: workspace.path) {
+                                viewModel.agentsForWorkspace[workspace.id] = nil
+                                Task { await viewModel.loadAgents(for: workspace) }
+                            }
+                            .tag(agent.agentId)
+                            .onTapGesture {
+                                viewModel.selectedAgentId = agent.agentId
+                                tabManager.openTab(TabItem(
+                                    title: agent.label,
+                                    icon: "bubble.left.fill",
+                                    contentType: .chat(agentId: agent.agentId),
+                                    workspaceId: workspace.id
+                                ))
+                            }
                         }
                     }
                 }
