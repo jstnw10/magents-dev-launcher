@@ -401,6 +401,36 @@ export class AgentServer {
       }
     }
 
+    // GET /session — list OpenCode sessions
+    if (method === "GET" && pathname === "/session") {
+      try {
+        const res = await fetch(`${this.openCodeUrl}/session`);
+        if (!res.ok) {
+          return errorResponse(`Failed to list sessions: ${res.status}`, 500);
+        }
+        const allSessions = (await res.json()) as Array<{
+          id: string;
+          directory: string;
+          parentID?: string;
+          title: string;
+          time: { created: number; updated: number };
+        }>;
+
+        // Filter to this workspace
+        let sessions = allSessions.filter(s => s.directory === this.workspacePath);
+
+        // Optional parentId filter
+        const parentId = url.searchParams.get("parentId");
+        if (parentId) {
+          sessions = sessions.filter(s => s.parentID === parentId);
+        }
+
+        return jsonResponse({ sessions });
+      } catch (err) {
+        return errorResponse((err as Error).message, 500);
+      }
+    }
+
     // GET /health — health check with version info
     if (method === "GET" && pathname === "/health") {
       return jsonResponse({ status: "ok", version: 2, features: ["events"] });

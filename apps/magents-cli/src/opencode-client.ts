@@ -77,6 +77,24 @@ export function createOpenCodeClient(serverUrl: string): OpenCodeClientInterface
           throw new Error(`Failed to delete session: ${res.status} ${await res.text()}`);
         }
       },
+
+      async list() {
+        const res = await fetch(`${base}/session`);
+        if (!res.ok) {
+          throw new Error(`Failed to list sessions: ${res.status} ${await res.text()}`);
+        }
+        const data = (await res.json()) as Array<{
+          id: string;
+          slug: string;
+          projectID: string;
+          directory: string;
+          parentID?: string;
+          title: string;
+          version?: string;
+          time: { created: number; updated: number };
+        }>;
+        return { data };
+      },
     },
   };
 }

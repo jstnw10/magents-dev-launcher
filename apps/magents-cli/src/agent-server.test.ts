@@ -149,6 +149,7 @@ function createMockClient(
         ],
       }),
       delete: async () => {},
+      list: async () => ({ data: [] }),
       ...overrides,
     },
   };

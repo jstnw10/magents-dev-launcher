@@ -21,67 +21,35 @@ final class SubAgentTracker {
 
     /// The parent agent's ID.
     private var parentAgentId: String = ""
-    /// The parent agent's creation date, used to detect sub-agents created after it.
-    private var parentCreatedAt: Date?
-    /// Agent IDs already tracked (parent + discovered sub-agents) to prevent re-adding.
-    private var knownAgentIds: Set<String> = []
     /// Whether tracking is active.
     private(set) var isTracking: Bool = false
 
     // MARK: - Tracking Lifecycle
 
     /// Start tracking sub-agents for a parent agent turn.
-    /// Uses the parent's createdAt date to detect agents spawned after it.
-    func startTracking(parentAgentId: String, parentCreatedAt: Date?, currentAgents: [AgentMetadata]) {
+    func startTracking(parentAgentId: String, parentSessionId: String) {
         self.parentAgentId = parentAgentId
-        self.parentCreatedAt = parentCreatedAt
-        knownAgentIds = Set([parentAgentId]) // Only mark the PARENT as known, not all agents
         activeSubAgents = []
         isTracking = true
-        print("[SubAgentTracker] Started tracking for parent \(parentAgentId), parentCreatedAt: \(String(describing: parentCreatedAt))")
+        print("[SubAgentTracker] Started tracking for parent \(parentAgentId) (session: \(parentSessionId))")
     }
 
-    /// Check for newly created agents by comparing createdAt against the parent.
-    /// Call this periodically while the parent agent is busy.
-    func checkForNewAgents(agents: [AgentMetadata]) {
-        guard isTracking else {
-            print("[SubAgentTracker] checkForNewAgents called but not tracking")
-            return
-        }
+    /// Check for new child sessions returned by the agent-server.
+    /// Sessions with the parent's sessionId are definitively sub-agents.
+    func checkForNewSessions(sessions: [SessionInfo]) {
+        guard isTracking else { return }
 
-        print("[SubAgentTracker] Checking \(agents.count) agents, parentAgentId=\(parentAgentId), parentCreatedAt=\(String(describing: parentCreatedAt))")
+        for session in sessions {
+            // Skip already-tracked
+            if activeSubAgents.contains(where: { $0.sessionId == session.id }) { continue }
 
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-        for agent in agents {
-            // Skip the parent agent itself
-            if agent.agentId == parentAgentId { continue }
-            // Skip already-tracked agents
-            if activeSubAgents.contains(where: { $0.agentId == agent.agentId }) { continue }
-
-            // Detect sub-agents: created after the parent agent
-            var isSubAgent = false
-            if let parentCreated = parentCreatedAt,
-               let agentCreated = formatter.date(from: agent.createdAt) {
-                isSubAgent = agentCreated > parentCreated
-                print("[SubAgentTracker] Agent \(agent.label) (\(agent.agentId)): created=\(agent.createdAt), parsed=\(agentCreated), parentCreated=\(parentCreated), isSubAgent=\(isSubAgent)")
-            } else {
-                // Fallback: if we can't compare dates, use the old snapshot approach
-                isSubAgent = !knownAgentIds.contains(agent.agentId)
-                print("[SubAgentTracker] Agent \(agent.label) (\(agent.agentId)): date parse fallback, isSubAgent=\(isSubAgent), createdAt=\(agent.createdAt)")
-            }
-
-            if isSubAgent {
-                let info = SubAgentInfo(
-                    agentId: agent.agentId,
-                    sessionId: agent.sessionId,
-                    label: agent.label
-                )
-                activeSubAgents.append(info)
-                knownAgentIds.insert(agent.agentId) // Prevent re-adding
-                print("[SubAgentTracker] ✅ Discovered sub-agent: \(agent.label) (\(agent.agentId))")
-            }
+            let info = SubAgentInfo(
+                agentId: session.id,
+                sessionId: session.id,
+                label: session.title
+            )
+            activeSubAgents.append(info)
+            print("[SubAgentTracker] Discovered sub-agent session: \(session.title) (\(session.id))")
         }
 
         print("[SubAgentTracker] After check: \(activeSubAgents.count) active sub-agents")
@@ -145,7 +113,6 @@ final class SubAgentTracker {
     /// Stop tracking and clear state.
     func stopTracking() {
         isTracking = false
-        knownAgentIds = []
         activeSubAgents = []
         print("[SubAgentTracker] Stopped tracking")
     }

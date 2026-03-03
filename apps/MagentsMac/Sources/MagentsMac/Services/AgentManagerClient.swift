@@ -183,6 +183,28 @@ final class AgentManagerClient: NSObject, @unchecked Sendable {
         return try JSONDecoder().decode(AgentConversationResponse.self, from: data)
     }
 
+    /// List OpenCode sessions, optionally filtered by parent session ID.
+    func listSessions(parentId: String? = nil) async throws -> [SessionInfo] {
+        var urlComponents = URLComponents(url: baseURL.appendingPathComponent("session"), resolvingAgainstBaseURL: false)!
+        if let parentId {
+            urlComponents.queryItems = [URLQueryItem(name: "parentId", value: parentId)]
+        }
+        guard let url = urlComponents.url else { throw AgentManagerClientError.httpError(statusCode: 0) }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw AgentManagerClientError.httpError(statusCode: statusCode)
+        }
+
+        let result = try JSONDecoder().decode(SessionListResponse.self, from: data)
+        return result.sessions
+    }
+
     // MARK: - Private
 
     private func receiveLoop(task: URLSessionWebSocketTask) {
@@ -284,6 +306,25 @@ struct SpecialistSummary: Codable, Identifiable, Sendable, Hashable {
     let description: String
     let defaultModel: String?
     let source: String
+}
+
+// MARK: - Session List Response (from GET /session)
+
+struct SessionInfo: Codable, Sendable {
+    let id: String
+    let directory: String
+    let parentID: String?
+    let title: String
+    let time: SessionTime
+
+    struct SessionTime: Codable, Sendable {
+        let created: Double
+        let updated: Double
+    }
+}
+
+struct SessionListResponse: Codable, Sendable {
+    let sessions: [SessionInfo]
 }
 
 // MARK: - Agent List Response (from GET /agent)
