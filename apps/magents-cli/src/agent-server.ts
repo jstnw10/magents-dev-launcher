@@ -239,9 +239,12 @@ export class AgentServer {
       if (!agentId) {
         return errorResponse("Invalid agent path for WebSocket", 400);
       }
-      try {
-        const metadata = await this.manager.getAgent(this.workspacePath, agentId);
-        if (!this.sessions.has(agentId)) {
+
+      // Create session entry if not already present
+      if (!this.sessions.has(agentId)) {
+        try {
+          // Try agent metadata first (for regular agents)
+          const metadata = await this.manager.getAgent(this.workspacePath, agentId);
           this.sessions.set(agentId, {
             agentId,
             sessionId: metadata.sessionId,
@@ -255,18 +258,36 @@ export class AgentServer {
             completedMessages: [],
             systemPromptSent: false,
           });
+        } catch (err) {
+          if (err instanceof OrchestrationError && err.code === "AGENT_NOT_FOUND" && agentId.startsWith("ses_")) {
+            // This is a session ID (sub-agent) — create session entry using sessionId directly
+            this.sessions.set(agentId, {
+              agentId,
+              sessionId: agentId,
+              assistantMessageId: null,
+              streamingParts: new Map(),
+              streamingPartOrder: [],
+              websockets: new Set(),
+              sseAbortController: null,
+              userText: null,
+              turnMessageCount: 0,
+              completedMessages: [],
+              systemPromptSent: false,
+            });
+          } else {
+            if (err instanceof OrchestrationError && err.code === "AGENT_NOT_FOUND") {
+              return errorResponse(`Agent not found: ${agentId}`, 404);
+            }
+            throw err;
+          }
         }
-        const upgraded = server.upgrade(req, { data: { type: "agent", agentId } as WebSocketData });
-        if (!upgraded) {
-          return errorResponse("WebSocket upgrade failed", 500);
-        }
-        return undefined as unknown as Response;
-      } catch (err) {
-        if (err instanceof OrchestrationError && err.code === "AGENT_NOT_FOUND") {
-          return errorResponse(`Agent not found: ${agentId}`, 404);
-        }
-        throw err;
       }
+
+      const upgraded = server.upgrade(req, { data: { type: "agent", agentId } as WebSocketData });
+      if (!upgraded) {
+        return errorResponse("WebSocket upgrade failed", 500);
+      }
+      return undefined as unknown as Response;
     }
 
     // GET /specialists — list available specialists
@@ -328,6 +349,17 @@ export class AgentServer {
     // GET /agent/:id
     if (method === "GET" && pathname.match(/^\/agent\/[^/]+$/) && !pathname.includes("/conversation")) {
       const agentId = extractAgentIdFromPath(pathname)!;
+
+      // For session-based sub-agents, return minimal metadata
+      if (agentId.startsWith("ses_")) {
+        return jsonResponse({
+          agentId,
+          sessionId: agentId,
+          label: agentId,
+          createdAt: new Date().toISOString(),
+        });
+      }
+
       try {
         const metadata = await this.manager.getAgent(this.workspacePath, agentId);
         return jsonResponse(metadata);
@@ -361,6 +393,42 @@ export class AgentServer {
     // GET /agent/:id/conversation
     if (method === "GET" && pathname.match(/^\/agent\/[^/]+\/conversation$/)) {
       const agentId = extractAgentIdFromPath(pathname)!;
+
+      // For session-based sub-agents, load messages directly from OpenCode
+      if (agentId.startsWith("ses_")) {
+        try {
+          const res = await fetch(`${this.openCodeUrl}/session/${agentId}/message`);
+          if (!res.ok) {
+            return errorResponse(`Failed to load session messages: ${res.status}`, res.status);
+          }
+          const messages = await res.json() as Array<{
+            info: { id: string; role: string; time: { created: number } };
+            parts: Array<{ type: string; text?: string; [key: string]: unknown }>;
+          }>;
+
+          // Convert to the conversation format the client expects
+          const convertedMessages = messages.map(msg => ({
+            id: msg.info.id,
+            role: msg.info.role,
+            contentBlocks: msg.parts.map(p => ({
+              type: p.type,
+              text: p.text,
+              ...p,
+            })),
+            timestamp: new Date(msg.info.time.created).toISOString(),
+          }));
+
+          return jsonResponse({
+            id: agentId,
+            metadata: null,
+            messages: convertedMessages,
+          });
+        } catch (err) {
+          return errorResponse((err as Error).message, 500);
+        }
+      }
+
+      // Regular agent — load from conversation log
       try {
         const conversation = await this.manager.getConversation(this.workspacePath, agentId);
         const metadata = await this.manager.getAgent(this.workspacePath, agentId);
@@ -545,14 +613,21 @@ export class AgentServer {
 
     console.log(`[AgentServer] handleUserMessage agentId=${agentId} sessionId=${session.sessionId}`);
 
-    const metadata = await this.manager.getAgent(this.workspacePath, agentId);
+    const isSessionBased = agentId.startsWith("ses_");
 
     // Build prompt parts — only prepend system prompt on the first message of the session
     const parts: Array<{ type: string; text?: string; [key: string]: unknown }> = [];
-    if (!session.systemPromptSent && metadata.systemPrompt) {
-      const resolvedPrompt = getPromptForAgent(metadata.systemPrompt);
-      parts.push({ type: "text", text: resolvedPrompt, synthetic: true });
-      session.systemPromptSent = true;
+    if (!isSessionBased) {
+      try {
+        const metadata = await this.manager.getAgent(this.workspacePath, agentId);
+        if (!session.systemPromptSent && metadata.systemPrompt) {
+          const resolvedPrompt = getPromptForAgent(metadata.systemPrompt);
+          parts.push({ type: "text", text: resolvedPrompt, synthetic: true });
+          session.systemPromptSent = true;
+        }
+      } catch {
+        // Agent metadata not found — skip system prompt
+      }
     }
     parts.push({ type: "text", text });
 
@@ -566,8 +641,10 @@ export class AgentServer {
     session.turnMessageCount = 0;
     session.completedMessages = [];
 
-    // Immediately persist user message to conversation log
-    await this.persistUserMessage(agentId, text);
+    // Immediately persist user message to conversation log (skip for session-based agents)
+    if (!isSessionBased) {
+      await this.persistUserMessage(agentId, text);
+    }
 
     // Subscribe to SSE BEFORE the POST so we don't miss early events
     console.log(`[AgentServer] Subscribing to SSE before POST...`);
@@ -900,6 +977,9 @@ export class AgentServer {
   // --- Conversation Logging ---
 
   private async logConversation(agentId: string, session: SessionState): Promise<void> {
+    // Skip conversation logging for session-based agents — OpenCode manages their conversations
+    if (agentId.startsWith("ses_")) return;
+
     const now = new Date().toISOString();
     const userText = session.userText;
     if (!userText) return; // Nothing to log

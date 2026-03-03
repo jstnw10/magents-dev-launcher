@@ -5,6 +5,7 @@ import SwiftUI
 
 enum TabContentType: Hashable, Codable {
     case chat(agentId: String)
+    case sessionChat(sessionId: String)  // For sub-agents (OpenCode sessions without agent metadata)
     case note(noteId: String)
     case spec(workspaceId: String)
     case workspaceBrowser

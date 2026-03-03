@@ -36,7 +36,7 @@ private struct SubAgentCard: View {
             tabManager.openTab(TabItem(
                 title: agent.label,
                 icon: "bubble.left.fill",
-                contentType: .chat(agentId: agent.agentId),
+                contentType: .sessionChat(sessionId: agent.sessionId),
                 workspaceId: workspaceId
             ))
         } label: {

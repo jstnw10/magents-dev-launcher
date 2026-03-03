@@ -81,6 +81,22 @@ struct ContentView: View {
                 )
             }
 
+        case .sessionChat(let sessionId):
+            if let workspacePath = workspacePath(for: tab) {
+                ChatView(
+                    agentId: sessionId,
+                    sessionId: sessionId,
+                    workspacePath: workspacePath,
+                    workspaceId: tab.workspaceId
+                )
+            } else {
+                contentUnavailableView(
+                    icon: "bubble.left.and.exclamationmark.bubble.right",
+                    title: "Workspace Not Found",
+                    message: "The workspace for this chat could not be located."
+                )
+            }
+
         case .note(let noteId):
             if let workspacePath = workspacePath(for: tab) {
                 DocumentView(
