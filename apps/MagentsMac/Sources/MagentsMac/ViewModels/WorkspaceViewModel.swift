@@ -80,12 +80,32 @@ final class WorkspaceViewModel {
 
     // MARK: - Session Tree
 
-    func loadSessions(for workspace: WorkspaceConfig, serverManager: ServerManager) async {
-        guard let baseURL = serverManager.agentManagerURL(for: workspace.path) else { return }
-        let client = AgentManagerClient(baseURL: baseURL)
+    func loadSessions(for workspace: WorkspaceConfig, serverManager: ServerManager, force: Bool = false) async {
+        // Skip if already loaded (unless forced)
+        if !force && sessionsForWorkspace[workspace.id] != nil { return }
+
+        var baseURL = serverManager.agentManagerURL(for: workspace.path)
+
+        // If no URL yet, try to start the agent-manager
+        if baseURL == nil {
+            do {
+                _ = try await serverManager.getOrStart(workspacePath: workspace.path)
+                baseURL = serverManager.agentManagerURL(for: workspace.path)
+            } catch {
+                print("[WorkspaceVM] Failed to start agent-manager for sessions: \(error)")
+            }
+        }
+
+        guard let url = baseURL else {
+            print("[WorkspaceVM] No agent-manager URL for loading sessions: \(workspace.title)")
+            return
+        }
+
+        let client = AgentManagerClient(baseURL: url)
         do {
             let sessions = try await client.listSessions()
             sessionsForWorkspace[workspace.id] = sessions
+            print("[WorkspaceVM] Loaded \(sessions.count) sessions for \(workspace.title)")
         } catch {
             print("[WorkspaceVM] Failed to load sessions for \(workspace.title): \(error)")
             sessionsForWorkspace[workspace.id] = []
@@ -143,6 +163,13 @@ final class WorkspaceViewModel {
         let wsTask = session.webSocketTask(with: wsURL)
         workspaceWebSockets[workspace.id] = wsTask
         wsTask.resume()
+
+        // Reload sessions now that agent-manager is confirmed running
+        let ws = workspace
+        Task { [weak self] in
+            guard let self else { return }
+            await self.loadSessions(for: ws, serverManager: serverManager, force: true)
+        }
 
         let workspaceId = workspace.id
         let workspacePath = workspace.path
