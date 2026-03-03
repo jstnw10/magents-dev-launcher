@@ -162,8 +162,8 @@ final class ChatViewModel {
             // This handles navigating to an already-busy agent or an idle agent that becomes busy.
             print("[ChatVM] messageStart: subAgentTracker.isTracking=\(subAgentTracker.isTracking), lastServerManager=\(lastServerManager != nil), lastWorkspaceViewModel=\(lastWorkspaceViewModel != nil)")
             if !subAgentTracker.isTracking, let sm = lastServerManager, let wvm = lastWorkspaceViewModel {
-                subAgentTracker.startTracking(parentAgentId: agentId, parentSessionId: sessionId)
-                startSubAgentPolling(serverManager: sm, workspaceViewModel: wvm)
+                subAgentTracker.startTracking(parentAgentId: agentId)
+                startSubAgentTracking(serverManager: sm, workspaceViewModel: wvm)
             }
 
         case .delta(let partId, let field, let delta):
@@ -455,8 +455,8 @@ final class ChatViewModel {
 
         // Start sub-agent tracking if workspace context is available
         if let workspaceViewModel {
-            subAgentTracker.startTracking(parentAgentId: agentId, parentSessionId: sessionId)
-            startSubAgentPolling(serverManager: serverManager, workspaceViewModel: workspaceViewModel)
+            subAgentTracker.startTracking(parentAgentId: agentId)
+            startSubAgentTracking(serverManager: serverManager, workspaceViewModel: workspaceViewModel)
             self.lastServerManager = serverManager
             self.lastWorkspaceViewModel = workspaceViewModel
         }
@@ -488,53 +488,92 @@ final class ChatViewModel {
         pendingQuestionRequestID = nil
     }
 
-    // MARK: - Sub-Agent Polling
+    // MARK: - Sub-Agent Tracking (Event-Driven)
 
-    /// Start polling for new sub-agents while the parent agent is busy.
-    private func startSubAgentPolling(serverManager: ServerManager, workspaceViewModel: WorkspaceViewModel) {
+    /// Start sub-agent tracking using event-driven approach (no polling).
+    private func startSubAgentTracking(serverManager: ServerManager, workspaceViewModel: WorkspaceViewModel) {
         stopSubAgentPolling()
         let workspacePath = self.workspacePath
         let parentSessionId = self.sessionId
-        print("[ChatVM] Starting sub-agent polling for workspace: \(workspacePath), parentSession: \(parentSessionId)")
+        print("[ChatVM] Starting event-driven sub-agent tracking for workspace: \(workspacePath), parentSession: \(parentSessionId)")
 
+        // 1. Register for session.created events targeting our session as parent
+        workspaceViewModel.registerSessionCreatedHandler(parentSessionId: parentSessionId) { [weak self] eventData in
+            guard let self else { return }
+            let dict = eventData.value
+            guard let properties = dict["properties"] as? [String: Any],
+                  let infoDict = properties["info"] as? [String: Any],
+                  let sessionId = infoDict["id"] as? String,
+                  let title = infoDict["title"] as? String else { return }
+
+            print("[ChatVM] session.created event: \(title) (\(sessionId))")
+
+            let info = SubAgentInfo(
+                agentId: sessionId,
+                sessionId: sessionId,
+                label: title
+            )
+            if !self.subAgentTracker.activeSubAgents.contains(where: { $0.sessionId == sessionId }) {
+                self.subAgentTracker.activeSubAgents.append(info)
+                print("[SubAgentTracker] ✅ New sub-agent via event: \(title)")
+            }
+
+            // Register event handler for this sub-agent's streaming events
+            let tracker = self.subAgentTracker
+            workspaceViewModel.registerEventHandler(sessionId: sessionId) { eventData in
+                tracker.handleEvent(eventData: eventData)
+            }
+        }
+
+        // 2. Load existing children (for when navigating to an already-active conversation)
         subAgentPollTask = Task { [weak self] in
-            var isFirstPoll = true
-            while !Task.isCancelled {
-                // First poll is immediate, subsequent polls wait 4 seconds
-                if !isFirstPoll {
-                    try? await Task.sleep(for: .seconds(4))
-                }
-                isFirstPoll = false
-                guard !Task.isCancelled, let self else { break }
+            guard let self else { return }
+            guard let baseURL = serverManager.agentManagerURL(for: workspacePath) else { return }
+            let client = AgentManagerClient(baseURL: baseURL)
 
-                guard let baseURL = serverManager.agentManagerURL(for: workspacePath) else {
-                    print("[ChatVM] Sub-agent poll: no baseURL for workspace \(workspacePath)")
-                    continue
-                }
-                let client = AgentManagerClient(baseURL: baseURL)
-                do {
-                    let sessions = try await client.listSessions(parentId: parentSessionId)
-                    print("[ChatVM] Sub-agent poll: found \(sessions.count) child sessions for parent \(parentSessionId)")
-                    self.subAgentTracker.checkForNewSessions(sessions: sessions)
+            do {
+                let children = try await client.getChildSessions(parentSessionId: parentSessionId)
+                print("[ChatVM] Initial load: found \(children.count) child sessions")
 
-                    // Register event handlers for newly discovered sub-agents
-                    for subAgent in self.subAgentTracker.activeSubAgents where !subAgent.isComplete {
+                for child in children {
+                    if !self.subAgentTracker.activeSubAgents.contains(where: { $0.sessionId == child.id }) {
+                        let info = SubAgentInfo(
+                            agentId: child.id,
+                            sessionId: child.id,
+                            label: child.title
+                        )
+                        self.subAgentTracker.activeSubAgents.append(info)
+                        print("[SubAgentTracker] ✅ Existing sub-agent: \(child.title)")
+
+                        // Register event handler
                         let tracker = self.subAgentTracker
-                        workspaceViewModel.registerEventHandler(sessionId: subAgent.sessionId) { eventData in
+                        workspaceViewModel.registerEventHandler(sessionId: child.id) { eventData in
                             tracker.handleEvent(eventData: eventData)
                         }
                     }
-                } catch {
-                    print("[ChatVM] Sub-agent poll error: \(error)")
                 }
+
+                // Also get current statuses to mark completed ones
+                let statuses = try await client.getSessionStatuses()
+                for (index, subAgent) in self.subAgentTracker.activeSubAgents.enumerated() {
+                    if let status = statuses[subAgent.sessionId], status.type == "idle" {
+                        self.subAgentTracker.activeSubAgents[index].isComplete = true
+                    }
+                }
+            } catch {
+                print("[ChatVM] Failed to load child sessions: \(error)")
             }
         }
     }
 
-    /// Stop polling for sub-agents.
+    /// Stop sub-agent tracking and unregister handlers.
     private func stopSubAgentPolling() {
         subAgentPollTask?.cancel()
         subAgentPollTask = nil
+        // Unregister session.created handler
+        if let wvm = lastWorkspaceViewModel {
+            wvm.unregisterSessionCreatedHandler(parentSessionId: sessionId)
+        }
     }
 
     /// Start sub-agent tracking for an already-active agent.
@@ -552,8 +591,8 @@ final class ChatViewModel {
 
         print("[ChatVM] startSubAgentTrackingIfNeeded: agentId=\(agentId), sessionId=\(sessionId), workspacePath=\(workspacePath)")
 
-        subAgentTracker.startTracking(parentAgentId: agentId, parentSessionId: sessionId)
-        startSubAgentPolling(serverManager: serverManager, workspaceViewModel: workspaceViewModel)
+        subAgentTracker.startTracking(parentAgentId: agentId)
+        startSubAgentTracking(serverManager: serverManager, workspaceViewModel: workspaceViewModel)
     }
 
     // MARK: - Cancel Streaming

@@ -24,6 +24,9 @@ final class WorkspaceViewModel {
     // Event handlers for active ChatViewModels — keyed by sessionId
     private var eventHandlers: [String: @MainActor (SendableDict) -> Void] = [:]
 
+    /// Handlers for session.created events, keyed by parent session ID
+    private var sessionCreatedHandlers: [String: @MainActor @Sendable (SendableDict) -> Void] = [:]
+
     private let fileManager = WorkspaceFileManager()
 
     // MARK: - Computed Properties
@@ -256,6 +259,14 @@ final class WorkspaceViewModel {
             }
         }
 
+        // Handle session.created for sub-agent tracking
+        if eventType == "session.created",
+           let infoDict = properties["info"] as? [String: Any],
+           let parentId = infoDict["parentID"] as? String,
+           let handler = sessionCreatedHandlers[parentId] {
+            handler(SendableDict(value: json))
+        }
+
         // Route event to registered handler (ChatViewModel or SubAgentTracker)
         if let sessionID = sessionID,
            let handler = eventHandlers[sessionID] {
@@ -282,6 +293,14 @@ final class WorkspaceViewModel {
 
     func unregisterEventHandler(sessionId: String) {
         eventHandlers[sessionId] = nil
+    }
+
+    func registerSessionCreatedHandler(parentSessionId: String, handler: @escaping @MainActor @Sendable (SendableDict) -> Void) {
+        sessionCreatedHandlers[parentSessionId] = handler
+    }
+
+    func unregisterSessionCreatedHandler(parentSessionId: String) {
+        sessionCreatedHandlers[parentSessionId] = nil
     }
 
     /// Check if workspace events WebSocket is connected for a given workspace

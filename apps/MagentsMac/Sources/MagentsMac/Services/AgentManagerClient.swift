@@ -183,6 +183,38 @@ final class AgentManagerClient: NSObject, @unchecked Sendable {
         return try JSONDecoder().decode(AgentConversationResponse.self, from: data)
     }
 
+    /// Get child sessions of a parent session.
+    func getChildSessions(parentSessionId: String) async throws -> [SessionInfo] {
+        let url = baseURL.appendingPathComponent("session/\(parentSessionId)/children")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw AgentManagerClientError.httpError(statusCode: statusCode)
+        }
+
+        return try JSONDecoder().decode([SessionInfo].self, from: data)
+    }
+
+    /// Get status of all sessions.
+    func getSessionStatuses() async throws -> [String: SessionStatusInfo] {
+        let url = baseURL.appendingPathComponent("session/status")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw AgentManagerClientError.httpError(statusCode: statusCode)
+        }
+
+        return try JSONDecoder().decode([String: SessionStatusInfo].self, from: data)
+    }
+
     /// List OpenCode sessions, optionally filtered by parent session ID.
     func listSessions(parentId: String? = nil) async throws -> [SessionInfo] {
         var urlComponents = URLComponents(url: baseURL.appendingPathComponent("session"), resolvingAgainstBaseURL: false)!
@@ -306,6 +338,12 @@ struct SpecialistSummary: Codable, Identifiable, Sendable, Hashable {
     let description: String
     let defaultModel: String?
     let source: String
+}
+
+// MARK: - Session Status Response (from GET /session/status)
+
+struct SessionStatusInfo: Codable, Sendable {
+    let type: String  // "idle", "busy", "retry"
 }
 
 // MARK: - Session List Response (from GET /session)

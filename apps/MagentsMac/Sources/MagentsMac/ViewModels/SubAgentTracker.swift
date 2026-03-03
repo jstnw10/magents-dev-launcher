@@ -27,32 +27,11 @@ final class SubAgentTracker {
     // MARK: - Tracking Lifecycle
 
     /// Start tracking sub-agents for a parent agent turn.
-    func startTracking(parentAgentId: String, parentSessionId: String) {
+    func startTracking(parentAgentId: String) {
         self.parentAgentId = parentAgentId
         activeSubAgents = []
         isTracking = true
-        print("[SubAgentTracker] Started tracking for parent \(parentAgentId) (session: \(parentSessionId))")
-    }
-
-    /// Check for new child sessions returned by the agent-server.
-    /// Sessions with the parent's sessionId are definitively sub-agents.
-    func checkForNewSessions(sessions: [SessionInfo]) {
-        guard isTracking else { return }
-
-        for session in sessions {
-            // Skip already-tracked
-            if activeSubAgents.contains(where: { $0.sessionId == session.id }) { continue }
-
-            let info = SubAgentInfo(
-                agentId: session.id,
-                sessionId: session.id,
-                label: session.title
-            )
-            activeSubAgents.append(info)
-            print("[SubAgentTracker] Discovered sub-agent session: \(session.title) (\(session.id))")
-        }
-
-        print("[SubAgentTracker] After check: \(activeSubAgents.count) active sub-agents")
+        print("[SubAgentTracker] Started tracking for parent \(parentAgentId)")
     }
 
     /// Handle a raw event routed from WorkspaceViewModel.

@@ -401,6 +401,35 @@ export class AgentServer {
       }
     }
 
+    // GET /session/:id/children — get child sessions of a parent
+    if (method === "GET" && pathname.match(/^\/session\/[^/]+\/children$/)) {
+      const sessionId = pathname.split("/")[2]
+      try {
+        const res = await fetch(`${this.openCodeUrl}/session/${sessionId}/children`)
+        if (!res.ok) {
+          return errorResponse(`Failed to get children: ${res.status}`, res.status)
+        }
+        const children = await res.json()
+        return jsonResponse(children)
+      } catch (err) {
+        return errorResponse((err as Error).message, 500)
+      }
+    }
+
+    // GET /session/status — get status of all sessions
+    if (method === "GET" && pathname === "/session/status") {
+      try {
+        const res = await fetch(`${this.openCodeUrl}/session/status`)
+        if (!res.ok) {
+          return errorResponse(`Failed to get status: ${res.status}`, res.status)
+        }
+        const status = await res.json()
+        return jsonResponse(status)
+      } catch (err) {
+        return errorResponse((err as Error).message, 500)
+      }
+    }
+
     // GET /session — list OpenCode sessions
     if (method === "GET" && pathname === "/session") {
       try {
