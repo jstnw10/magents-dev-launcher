@@ -116,9 +116,9 @@ final class WorkspaceViewModel {
         sessionsForWorkspace[workspace.id] ?? []
     }
 
-    /// Returns child sessions of a given parent
+    /// Returns child sessions of a given parent (only explicitly delegated sub-agents)
     func childSessions(parentId: String, for workspace: WorkspaceConfig) -> [SessionInfo] {
-        sessions(for: workspace).filter { $0.parentID == parentId }
+        sessions(for: workspace).filter { $0.parentID == parentId && $0.title.contains("(@general subagent)") }
             .sorted { $0.time.created < $1.time.created }
     }
 
