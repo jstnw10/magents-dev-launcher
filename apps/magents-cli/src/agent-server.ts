@@ -411,9 +411,9 @@ export class AgentServer {
             id: msg.info.id,
             role: msg.info.role,
             contentBlocks: msg.parts.map(p => ({
+              ...p,
               type: p.type,
               text: p.text,
-              ...p,
             })),
             timestamp: new Date(msg.info.time.created).toISOString(),
           }));
