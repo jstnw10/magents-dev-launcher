@@ -215,6 +215,30 @@ final class ServerManager {
 
     // MARK: - Agent Manager
 
+    /// Restarts the agent-manager for a workspace by killing the existing process,
+    /// cleaning up stale state, and starting fresh.
+    func restartAgentManager(workspacePath: String) async {
+        // 1. Kill existing process if we have one
+        if let process = agentManagerProcesses[workspacePath], process.isRunning {
+            process.terminate()
+        }
+        agentManagerProcesses[workspacePath] = nil
+
+        // 2. Delete stale server.json
+        let serverJsonPath = "\(workspacePath)/.workspace/agent-manager/server.json"
+        try? Foundation.FileManager.default.removeItem(atPath: serverJsonPath)
+
+        // 3. Clear cached info
+        agentManagerInfo[workspacePath] = nil
+
+        // 4. Get OpenCode URL from server status and restart
+        if case .running(let info) = serverStatus[workspacePath] {
+            await ensureAgentManager(workspacePath: workspacePath, openCodeURL: info.url)
+        }
+
+        print("[ServerManager] Agent-manager restarted for \(workspacePath)")
+    }
+
     /// Ensures the agent-manager server is running for the workspace.
     private func ensureAgentManager(workspacePath: String, openCodeURL: String) async {
         // Check if already running in-memory
@@ -228,8 +252,16 @@ final class ServerManager {
 
         // Check if server.json exists on disk (started externally)
         if let info = readAgentManagerInfo(workspacePath: workspacePath) {
-            agentManagerInfo[workspacePath] = info
-            return
+            // Verify the server is actually reachable before trusting stale info
+            if await isAgentManagerHealthy(url: info.url) {
+                agentManagerInfo[workspacePath] = info
+                return
+            } else {
+                // Stale server.json — clean up and start fresh
+                print("[ServerManager] Agent-manager at \(info.url) is not reachable — removing stale server.json")
+                let serverJsonPath = "\(workspacePath)/.workspace/agent-manager/server.json"
+                try? Foundation.FileManager.default.removeItem(atPath: serverJsonPath)
+            }
         }
 
         // Start agent-manager
@@ -237,6 +269,27 @@ final class ServerManager {
             try await startAgentManager(workspacePath: workspacePath, openCodeURL: openCodeURL)
         } catch {
             print("[ServerManager] Failed to start agent-manager: \(error)")
+        }
+    }
+
+    private func isAgentManagerHealthy(url: String) async -> Bool {
+        guard let healthURL = URL(string: url)?.appendingPathComponent("health") else { return false }
+        var request = URLRequest(url: healthURL)
+        request.timeoutInterval = 3
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else { return false }
+            // Check that the server supports the events feature
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let features = json["features"] as? [String],
+               features.contains("events") {
+                return true
+            }
+            // Server responded but doesn't support events — treat as stale
+            return false
+        } catch {
+            return false
         }
     }
 

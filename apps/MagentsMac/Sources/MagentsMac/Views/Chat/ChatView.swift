@@ -3,10 +3,12 @@ import SwiftUI
 struct ChatView: View {
     @Environment(ServerManager.self) private var serverManager
     @Environment(ChatViewModelStore.self) private var store
+    @Environment(WorkspaceViewModel.self) private var workspaceViewModel
 
     let agentId: String
     let sessionId: String
     let workspacePath: String
+    var workspaceId: String?
 
     private var viewModel: ChatViewModel {
         store.viewModel(agentId: agentId, sessionId: sessionId, workspacePath: workspacePath)
@@ -78,14 +80,23 @@ struct ChatView: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.yellow)
                     Text(error)
-                        .font(.caption)
+                        .font(.callout)
                     Spacer()
                     Button("Dismiss") { viewModel.error = nil }
                         .buttonStyle(.plain)
-                        .font(.caption)
+                        .font(.callout)
                 }
                 .padding(8)
                 .background(Color.red.opacity(0.1))
+            }
+
+            // Sub-agent status bar
+            if !viewModel.subAgentTracker.activeSubAgents.isEmpty {
+                Divider()
+                SubAgentStatusBar(
+                    subAgents: viewModel.subAgentTracker.activeSubAgents,
+                    workspaceId: workspaceId
+                )
             }
 
             Divider()
@@ -96,6 +107,7 @@ struct ChatView: View {
         .task {
             await viewModel.loadConversation(serverManager: serverManager)
             await viewModel.connectWebSocket(serverManager: serverManager)
+            viewModel.startSubAgentTrackingIfNeeded(serverManager: serverManager, workspaceViewModel: workspaceViewModel)
         }
     }
 
@@ -119,7 +131,7 @@ struct ChatView: View {
         @Bindable var vm = viewModel
         HStack(alignment: .bottom, spacing: 8) {
             TextEditor(text: $vm.inputText)
-                .font(.body)
+                .font(.system(size: 15))
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 36, maxHeight: 120)
                 .fixedSize(horizontal: false, vertical: true)
@@ -132,12 +144,12 @@ struct ChatView: View {
                     if keyPress.modifiers.contains(.shift) {
                         return .ignored // let shift+enter insert newline
                     }
-                    Task { await viewModel.sendMessage(serverManager: serverManager) }
+                    Task { await viewModel.sendMessage(serverManager: serverManager, workspaceViewModel: workspaceViewModel) }
                     return .handled
                 }
 
             Button {
-                Task { await viewModel.sendMessage(serverManager: serverManager) }
+                Task { await viewModel.sendMessage(serverManager: serverManager, workspaceViewModel: workspaceViewModel) }
             } label: {
                 Image(systemName: "paperplane.fill")
                     .font(.title3)

@@ -811,6 +811,9 @@ function createMockOpenCodeClient(): OpenCodeClientInterface {
       async delete(params) {
         sessions.delete(params.path.id);
       },
+      async list() {
+        return { data: [] };
+      },
     },
   };
 }

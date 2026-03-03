@@ -39,6 +39,8 @@ interface SessionState {
 
 type ServerWebSocket = { data: unknown; send(data: string): void };
 
+type WebSocketData = { type: "agent"; agentId: string } | { type: "workspace" };
+
 // --- Helpers ---
 
 export const DEFAULT_AGENT_SERVER_PORT = 4097;
@@ -114,6 +116,10 @@ export class AgentServer {
   private server: ReturnType<typeof Bun.serve> | null = null;
   private sessions = new Map<string, SessionState>();
 
+  // Workspace-level event broadcasting
+  private workspaceWebsockets = new Set<ServerWebSocket>();
+  private workspaceSSEController: AbortController | null = null;
+
   constructor(options: AgentServerOptions) {
     this.workspacePath = options.workspacePath;
     this.manager = options.manager;
@@ -135,23 +141,45 @@ export class AgentServer {
 
       websocket: {
         open(ws) {
-          const agentId = (ws.data as { agentId: string }).agentId;
-          const session = self.sessions.get(agentId);
-          if (session) {
-            session.websockets.add(ws as unknown as ServerWebSocket);
+          const data = ws.data as WebSocketData;
+          if (data.type === "workspace") {
+            self.workspaceWebsockets.add(ws as unknown as ServerWebSocket);
+            self.ensureWorkspaceSSESubscription();
+            console.log(`[AgentServer] Workspace WebSocket connected (total: ${self.workspaceWebsockets.size})`);
+          } else {
+            const session = self.sessions.get(data.agentId);
+            if (session) {
+              session.websockets.add(ws as unknown as ServerWebSocket);
+            }
           }
         },
         async message(ws, message) {
+          const data = ws.data as WebSocketData;
+          if (data.type === "workspace") {
+            // Workspace websockets are read-only — no messages expected
+            return;
+          }
           await self.handleWebSocketMessage(ws as unknown as ServerWebSocket, message);
         },
         close(ws) {
-          const agentId = (ws.data as { agentId: string }).agentId;
-          const session = self.sessions.get(agentId);
-          if (session) {
-            session.websockets.delete(ws as unknown as ServerWebSocket);
-            // Save conversation when last client disconnects
-            if (session.websockets.size === 0 && session.streamingPartOrder.length > 0) {
-              self.logConversation(agentId, session).catch(() => {});
+          const data = ws.data as WebSocketData;
+          if (data.type === "workspace") {
+            self.workspaceWebsockets.delete(ws as unknown as ServerWebSocket);
+            console.log(`[AgentServer] Workspace WebSocket disconnected (remaining: ${self.workspaceWebsockets.size})`);
+            // Abort workspace SSE if no more clients
+            if (self.workspaceWebsockets.size === 0 && self.workspaceSSEController) {
+              console.log(`[AgentServer] No workspace clients — aborting workspace SSE`);
+              self.workspaceSSEController.abort();
+              self.workspaceSSEController = null;
+            }
+          } else {
+            const session = self.sessions.get(data.agentId);
+            if (session) {
+              session.websockets.delete(ws as unknown as ServerWebSocket);
+              // Save conversation when last client disconnects
+              if (session.websockets.size === 0 && session.streamingPartOrder.length > 0) {
+                self.logConversation(data.agentId, session).catch(() => {});
+              }
             }
           }
         },
@@ -174,6 +202,11 @@ export class AgentServer {
     }
     this.sessions.clear();
 
+    // Clean up workspace SSE
+    this.workspaceSSEController?.abort();
+    this.workspaceSSEController = null;
+    this.workspaceWebsockets.clear();
+
     if (this.server) {
       this.server.stop(true);
       this.server = null;
@@ -192,13 +225,26 @@ export class AgentServer {
 
     // WebSocket upgrade
     if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+      // Workspace-level event stream
+      if (pathname === "/events") {
+        const upgraded = server.upgrade(req, { data: { type: "workspace" } as WebSocketData });
+        if (!upgraded) {
+          return errorResponse("WebSocket upgrade failed", 500);
+        }
+        return undefined as unknown as Response;
+      }
+
+      // Per-agent WebSocket
       const agentId = extractAgentIdFromPath(pathname);
       if (!agentId) {
         return errorResponse("Invalid agent path for WebSocket", 400);
       }
-      try {
-        const metadata = await this.manager.getAgent(this.workspacePath, agentId);
-        if (!this.sessions.has(agentId)) {
+
+      // Create session entry if not already present
+      if (!this.sessions.has(agentId)) {
+        try {
+          // Try agent metadata first (for regular agents)
+          const metadata = await this.manager.getAgent(this.workspacePath, agentId);
           this.sessions.set(agentId, {
             agentId,
             sessionId: metadata.sessionId,
@@ -212,18 +258,36 @@ export class AgentServer {
             completedMessages: [],
             systemPromptSent: false,
           });
+        } catch (err) {
+          if (err instanceof OrchestrationError && err.code === "AGENT_NOT_FOUND" && agentId.startsWith("ses_")) {
+            // This is a session ID (sub-agent) — create session entry using sessionId directly
+            this.sessions.set(agentId, {
+              agentId,
+              sessionId: agentId,
+              assistantMessageId: null,
+              streamingParts: new Map(),
+              streamingPartOrder: [],
+              websockets: new Set(),
+              sseAbortController: null,
+              userText: null,
+              turnMessageCount: 0,
+              completedMessages: [],
+              systemPromptSent: false,
+            });
+          } else {
+            if (err instanceof OrchestrationError && err.code === "AGENT_NOT_FOUND") {
+              return errorResponse(`Agent not found: ${agentId}`, 404);
+            }
+            throw err;
+          }
         }
-        const upgraded = server.upgrade(req, { data: { agentId } });
-        if (!upgraded) {
-          return errorResponse("WebSocket upgrade failed", 500);
-        }
-        return undefined as unknown as Response;
-      } catch (err) {
-        if (err instanceof OrchestrationError && err.code === "AGENT_NOT_FOUND") {
-          return errorResponse(`Agent not found: ${agentId}`, 404);
-        }
-        throw err;
       }
+
+      const upgraded = server.upgrade(req, { data: { type: "agent", agentId } as WebSocketData });
+      if (!upgraded) {
+        return errorResponse("WebSocket upgrade failed", 500);
+      }
+      return undefined as unknown as Response;
     }
 
     // GET /specialists — list available specialists
@@ -285,6 +349,17 @@ export class AgentServer {
     // GET /agent/:id
     if (method === "GET" && pathname.match(/^\/agent\/[^/]+$/) && !pathname.includes("/conversation")) {
       const agentId = extractAgentIdFromPath(pathname)!;
+
+      // For session-based sub-agents, return minimal metadata
+      if (agentId.startsWith("ses_")) {
+        return jsonResponse({
+          agentId,
+          sessionId: agentId,
+          label: agentId,
+          createdAt: new Date().toISOString(),
+        });
+      }
+
       try {
         const metadata = await this.manager.getAgent(this.workspacePath, agentId);
         return jsonResponse(metadata);
@@ -318,6 +393,42 @@ export class AgentServer {
     // GET /agent/:id/conversation
     if (method === "GET" && pathname.match(/^\/agent\/[^/]+\/conversation$/)) {
       const agentId = extractAgentIdFromPath(pathname)!;
+
+      // For session-based sub-agents, load messages directly from OpenCode
+      if (agentId.startsWith("ses_")) {
+        try {
+          const res = await fetch(`${this.openCodeUrl}/session/${agentId}/message`);
+          if (!res.ok) {
+            return errorResponse(`Failed to load session messages: ${res.status}`, res.status);
+          }
+          const messages = await res.json() as Array<{
+            info: { id: string; role: string; time: { created: number } };
+            parts: Array<{ type: string; text?: string; [key: string]: unknown }>;
+          }>;
+
+          // Convert to the conversation format the client expects
+          const convertedMessages = messages.map(msg => ({
+            id: msg.info.id,
+            role: msg.info.role,
+            contentBlocks: msg.parts.map(p => ({
+              ...p,
+              type: p.type,
+              text: p.text,
+            })),
+            timestamp: new Date(msg.info.time.created).toISOString(),
+          }));
+
+          return jsonResponse({
+            id: agentId,
+            metadata: null,
+            messages: convertedMessages,
+          });
+        } catch (err) {
+          return errorResponse((err as Error).message, 500);
+        }
+      }
+
+      // Regular agent — load from conversation log
       try {
         const conversation = await this.manager.getConversation(this.workspacePath, agentId);
         const metadata = await this.manager.getAgent(this.workspacePath, agentId);
@@ -356,6 +467,70 @@ export class AgentServer {
         }
         return errorResponse((err as Error).message, 500);
       }
+    }
+
+    // GET /session/:id/children — get child sessions of a parent
+    if (method === "GET" && pathname.match(/^\/session\/[^/]+\/children$/)) {
+      const sessionId = pathname.split("/")[2]
+      try {
+        const res = await fetch(`${this.openCodeUrl}/session/${sessionId}/children`)
+        if (!res.ok) {
+          return errorResponse(`Failed to get children: ${res.status}`, res.status)
+        }
+        const children = await res.json()
+        return jsonResponse(children)
+      } catch (err) {
+        return errorResponse((err as Error).message, 500)
+      }
+    }
+
+    // GET /session/status — get status of all sessions
+    if (method === "GET" && pathname === "/session/status") {
+      try {
+        const res = await fetch(`${this.openCodeUrl}/session/status`)
+        if (!res.ok) {
+          return errorResponse(`Failed to get status: ${res.status}`, res.status)
+        }
+        const status = await res.json()
+        return jsonResponse(status)
+      } catch (err) {
+        return errorResponse((err as Error).message, 500)
+      }
+    }
+
+    // GET /session — list OpenCode sessions
+    if (method === "GET" && pathname === "/session") {
+      try {
+        const res = await fetch(`${this.openCodeUrl}/session`);
+        if (!res.ok) {
+          return errorResponse(`Failed to list sessions: ${res.status}`, 500);
+        }
+        const allSessions = (await res.json()) as Array<{
+          id: string;
+          directory: string;
+          parentID?: string;
+          title: string;
+          time: { created: number; updated: number };
+        }>;
+
+        // Filter to this workspace
+        let sessions = allSessions.filter(s => s.directory === this.workspacePath);
+
+        // Optional parentId filter
+        const parentId = url.searchParams.get("parentId");
+        if (parentId) {
+          sessions = sessions.filter(s => s.parentID === parentId);
+        }
+
+        return jsonResponse({ sessions });
+      } catch (err) {
+        return errorResponse((err as Error).message, 500);
+      }
+    }
+
+    // GET /health — health check with version info
+    if (method === "GET" && pathname === "/health") {
+      return jsonResponse({ status: "ok", version: 2, features: ["events"] });
     }
 
     return errorResponse("Not found", 404);
@@ -438,14 +613,21 @@ export class AgentServer {
 
     console.log(`[AgentServer] handleUserMessage agentId=${agentId} sessionId=${session.sessionId}`);
 
-    const metadata = await this.manager.getAgent(this.workspacePath, agentId);
+    const isSessionBased = agentId.startsWith("ses_");
 
     // Build prompt parts — only prepend system prompt on the first message of the session
     const parts: Array<{ type: string; text?: string; [key: string]: unknown }> = [];
-    if (!session.systemPromptSent && metadata.systemPrompt) {
-      const resolvedPrompt = getPromptForAgent(metadata.systemPrompt);
-      parts.push({ type: "text", text: resolvedPrompt, synthetic: true });
-      session.systemPromptSent = true;
+    if (!isSessionBased) {
+      try {
+        const metadata = await this.manager.getAgent(this.workspacePath, agentId);
+        if (!session.systemPromptSent && metadata.systemPrompt) {
+          const resolvedPrompt = getPromptForAgent(metadata.systemPrompt);
+          parts.push({ type: "text", text: resolvedPrompt, synthetic: true });
+          session.systemPromptSent = true;
+        }
+      } catch {
+        // Agent metadata not found — skip system prompt
+      }
     }
     parts.push({ type: "text", text });
 
@@ -459,8 +641,10 @@ export class AgentServer {
     session.turnMessageCount = 0;
     session.completedMessages = [];
 
-    // Immediately persist user message to conversation log
-    await this.persistUserMessage(agentId, text);
+    // Immediately persist user message to conversation log (skip for session-based agents)
+    if (!isSessionBased) {
+      await this.persistUserMessage(agentId, text);
+    }
 
     // Subscribe to SSE BEFORE the POST so we don't miss early events
     console.log(`[AgentServer] Subscribing to SSE before POST...`);
@@ -793,6 +977,9 @@ export class AgentServer {
   // --- Conversation Logging ---
 
   private async logConversation(agentId: string, session: SessionState): Promise<void> {
+    // Skip conversation logging for session-based agents — OpenCode manages their conversations
+    if (agentId.startsWith("ses_")) return;
+
     const now = new Date().toISOString();
     const userText = session.userText;
     if (!userText) return; // Nothing to log
@@ -913,6 +1100,80 @@ export class AgentServer {
         // WebSocket may have closed
       }
     }
+  }
+
+  private broadcastToWorkspace(data: string): void {
+    for (const ws of this.workspaceWebsockets) {
+      try {
+        ws.send(data);
+      } catch {
+        // WebSocket may have closed
+      }
+    }
+  }
+
+  // --- Workspace SSE Subscription ---
+
+  private ensureWorkspaceSSESubscription(): void {
+    if (this.workspaceSSEController) return;
+
+    const controller = new AbortController();
+    this.workspaceSSEController = controller;
+
+    const sseUrl = `${this.openCodeUrl}/event`;
+    console.log(`[AgentServer] Workspace SSE subscribing to ${sseUrl}`);
+
+    (async () => {
+      let reconnectDelay = 1;
+      while (!controller.signal.aborted) {
+        try {
+          const res = await fetch(sseUrl, {
+            headers: { Accept: "text/event-stream" },
+            signal: controller.signal,
+          });
+
+          if (!res.ok || !res.body) {
+            console.log(`[AgentServer] Workspace SSE connection failed: ${res.status}`);
+            break;
+          }
+
+          console.log(`[AgentServer] Workspace SSE connected`);
+          reconnectDelay = 1; // Reset on successful connection
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const { events, remainder } = parseSSEChunk(buffer);
+            buffer = remainder;
+
+            for (const event of events) {
+              // Broadcast raw event data to all workspace websocket clients
+              this.broadcastToWorkspace(event.data);
+            }
+          }
+
+          console.log(`[AgentServer] Workspace SSE stream ended`);
+        } catch (err) {
+          if ((err as Error).name === "AbortError") break;
+          console.log(`[AgentServer] Workspace SSE error: ${(err as Error).message}`);
+        }
+
+        // Reconnect with backoff
+        if (controller.signal.aborted) break;
+        console.log(`[AgentServer] Workspace SSE reconnecting in ${reconnectDelay}s`);
+        await new Promise((resolve) => setTimeout(resolve, reconnectDelay * 1000));
+        reconnectDelay = Math.min(reconnectDelay * 2, 30);
+      }
+
+      if (this.workspaceSSEController === controller) {
+        this.workspaceSSEController = null;
+      }
+    })();
   }
 
   // --- Server Info Persistence ---

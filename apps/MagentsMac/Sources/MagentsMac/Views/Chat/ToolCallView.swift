@@ -31,14 +31,14 @@ struct ToolCallView: View {
                 HStack(spacing: 6) {
                     statusIcon
                     Image(systemName: toolIcon)
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                     Text(toolDisplayName)
-                        .font(.caption)
+                        .font(.callout)
                         .fontWeight(.medium)
                     if let title = part.toolTitle, !title.isEmpty {
                         Text(title)
-                            .font(.caption)
+                            .font(.callout)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -46,7 +46,7 @@ struct ToolCallView: View {
                     Spacer()
                     if part.toolStatus == .completed || part.toolStatus == .error {
                         Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                            .font(.caption2)
+                            .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
                 }
@@ -92,15 +92,15 @@ struct ToolCallView: View {
                 .controlSize(.mini)
         case .completed:
             Image(systemName: "checkmark.circle.fill")
-                .font(.caption)
+                .font(.callout)
                 .foregroundStyle(.green)
         case .error:
             Image(systemName: "xmark.circle.fill")
-                .font(.caption)
+                .font(.callout)
                 .foregroundStyle(.red)
         case .none:
             Image(systemName: "circle")
-                .font(.caption)
+                .font(.callout)
                 .foregroundStyle(.secondary)
         }
     }
@@ -144,12 +144,12 @@ struct ToolCallView: View {
     private func detailSection(label: String, content: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(.caption2)
+                .font(.caption)
                 .fontWeight(.semibold)
                 .foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(content)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.system(.callout, design: .monospaced))
                     .textSelection(.enabled)
             }
             .frame(maxHeight: 200)
@@ -202,16 +202,16 @@ struct CompletedQuestionView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle.fill")
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.green)
                 Image(systemName: "questionmark.circle")
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                 Text("Question")
-                    .font(.caption)
+                    .font(.callout)
                     .fontWeight(.medium)
                 Text("answered")
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                 Spacer()
             }
@@ -238,22 +238,22 @@ struct CompletedQuestionView: View {
         VStack(alignment: .leading, spacing: 4) {
             if let header = question["header"] as? String, !header.isEmpty {
                 Text(header)
-                    .font(.caption)
+                    .font(.callout)
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
             }
             if let text = question["question"] as? String, !text.isEmpty {
                 Text(text)
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
             if let ans = answer(for: question) {
                 HStack(spacing: 4) {
                     Image(systemName: "checkmark")
-                        .font(.caption2)
+                        .font(.caption)
                         .foregroundStyle(Color.accentColor)
                     Text(ans)
-                        .font(.caption)
+                        .font(.callout)
                         .fontWeight(.medium)
                         .foregroundStyle(Color.accentColor)
                 }

@@ -150,6 +150,23 @@ final class AgentManagerClient: NSObject, @unchecked Sendable {
         return try JSONDecoder().decode(AgentMetadata.self, from: data)
     }
 
+    /// List all agents via agent-manager HTTP API.
+    func listAgents() async throws -> [AgentMetadata] {
+        let url = baseURL.appendingPathComponent("agent")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw AgentManagerClientError.httpError(statusCode: statusCode)
+        }
+
+        let result = try JSONDecoder().decode(AgentListResponse.self, from: data)
+        return result.agents
+    }
+
     /// Load conversation history for an agent via HTTP.
     func getConversation(agentId: String) async throws -> AgentConversationResponse {
         let url = baseURL.appendingPathComponent("agent/\(agentId)/conversation")
@@ -164,6 +181,60 @@ final class AgentManagerClient: NSObject, @unchecked Sendable {
         }
 
         return try JSONDecoder().decode(AgentConversationResponse.self, from: data)
+    }
+
+    /// Get child sessions of a parent session.
+    func getChildSessions(parentSessionId: String) async throws -> [SessionInfo] {
+        let url = baseURL.appendingPathComponent("session/\(parentSessionId)/children")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw AgentManagerClientError.httpError(statusCode: statusCode)
+        }
+
+        return try JSONDecoder().decode([SessionInfo].self, from: data)
+    }
+
+    /// Get status of all sessions.
+    func getSessionStatuses() async throws -> [String: SessionStatusInfo] {
+        let url = baseURL.appendingPathComponent("session/status")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw AgentManagerClientError.httpError(statusCode: statusCode)
+        }
+
+        return try JSONDecoder().decode([String: SessionStatusInfo].self, from: data)
+    }
+
+    /// List OpenCode sessions, optionally filtered by parent session ID.
+    func listSessions(parentId: String? = nil) async throws -> [SessionInfo] {
+        var urlComponents = URLComponents(url: baseURL.appendingPathComponent("session"), resolvingAgainstBaseURL: false)!
+        if let parentId {
+            urlComponents.queryItems = [URLQueryItem(name: "parentId", value: parentId)]
+        }
+        guard let url = urlComponents.url else { throw AgentManagerClientError.httpError(statusCode: 0) }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw AgentManagerClientError.httpError(statusCode: statusCode)
+        }
+
+        let result = try JSONDecoder().decode(SessionListResponse.self, from: data)
+        return result.sessions
     }
 
     // MARK: - Private
@@ -267,6 +338,37 @@ struct SpecialistSummary: Codable, Identifiable, Sendable, Hashable {
     let description: String
     let defaultModel: String?
     let source: String
+}
+
+// MARK: - Session Status Response (from GET /session/status)
+
+struct SessionStatusInfo: Codable, Sendable {
+    let type: String  // "idle", "busy", "retry"
+}
+
+// MARK: - Session List Response (from GET /session)
+
+struct SessionInfo: Codable, Identifiable, Sendable {
+    let id: String
+    let directory: String
+    let parentID: String?
+    let title: String
+    let time: SessionTime
+
+    struct SessionTime: Codable, Sendable {
+        let created: Double
+        let updated: Double
+    }
+}
+
+struct SessionListResponse: Codable, Sendable {
+    let sessions: [SessionInfo]
+}
+
+// MARK: - Agent List Response (from GET /agent)
+
+struct AgentListResponse: Codable, Sendable {
+    let agents: [AgentMetadata]
 }
 
 // MARK: - Conversation Response (from GET /agent/:id/conversation)

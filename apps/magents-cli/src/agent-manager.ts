@@ -43,6 +43,16 @@ export interface OpenCodeClientInterface {
       }>;
     }>;
     delete(params: { path: { id: string } }): Promise<void>;
+    list(): Promise<{
+      data: Array<{
+        id: string;
+        slug: string;
+        directory: string;
+        parentID?: string;
+        title: string;
+        time: { created: number; updated: number };
+      }>;
+    }>;
   };
 }
 

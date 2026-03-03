@@ -31,6 +31,9 @@ final class ChatViewModel {
     let sessionId: String
     let workspacePath: String
 
+    /// Tracks sub-agents spawned during this agent's turns.
+    let subAgentTracker = SubAgentTracker()
+
     /// The request ID from the most recent `question.asked` WebSocket frame.
     var pendingQuestionRequestID: String?
 
@@ -38,7 +41,18 @@ final class ChatViewModel {
     private var agentManagerClient: AgentManagerClient?
     private var webSocketTask: Task<Void, Never>?
     private var loadingTimeoutTask: Task<Void, Never>?
+    private var subAgentPollTask: Task<Void, Never>?
     private var hasReceivedStreamingEvents: Bool = false
+
+    /// Weak references for auto-starting sub-agent tracking from handleFrame.
+    private weak var lastServerManager: ServerManager?
+    private weak var lastWorkspaceViewModel: WorkspaceViewModel?
+
+    /// Accumulated token counts across multiple `message.complete` events in a single turn.
+    private var accumulatedInputTokens: Int = 0
+    private var accumulatedOutputTokens: Int = 0
+    /// Accumulated cost across multiple `message.complete` events in a single turn.
+    private var accumulatedCost: Double = 0
 
     /// Timeout duration in seconds before loading state is cleared with an error.
     private let loadingTimeoutSeconds: UInt64 = 60
@@ -84,6 +98,7 @@ final class ChatViewModel {
     /// Disconnect the WebSocket.
     func disconnectWebSocket() {
         cancelLoadingTimeout()
+        stopSubAgentPolling()
         webSocketTask?.cancel()
         webSocketTask = nil
         agentManagerClient?.disconnect()
@@ -138,12 +153,18 @@ final class ChatViewModel {
             // Activity received — reset timeout
             hasReceivedStreamingEvents = true
             startLoadingTimeout()
-            // If there's already a streaming message, finalize it first
-            if !streamingParts.isEmpty {
-                finalizeStreamingMessage()
-            }
+            // Continue accumulating parts across message boundaries within the same turn.
+            // Do NOT finalize here — just update the message ID for new parts.
             self.assistantMessageId = messageId
             print("[ChatVM] WS: message.start messageId=\(messageId)")
+
+            // Auto-start sub-agent tracking if not already active.
+            // This handles navigating to an already-busy agent or an idle agent that becomes busy.
+            print("[ChatVM] messageStart: subAgentTracker.isTracking=\(subAgentTracker.isTracking), lastServerManager=\(lastServerManager != nil), lastWorkspaceViewModel=\(lastWorkspaceViewModel != nil)")
+            if !subAgentTracker.isTracking, let sm = lastServerManager, let wvm = lastWorkspaceViewModel {
+                subAgentTracker.startTracking(parentAgentId: agentId)
+                startSubAgentTracking(serverManager: sm, workspaceViewModel: wvm)
+            }
 
         case .delta(let partId, let field, let delta):
             // Activity received — reset timeout
@@ -208,9 +229,24 @@ final class ChatViewModel {
                 self.streamingPartOrder.append(partId)
             }
 
-        case .messageComplete(_, _, _):
+        case .messageComplete(_, let tokens, let cost):
             cancelLoadingTimeout()
-            self.finalizeStreamingMessage()
+            // Accumulate tokens and cost — do NOT finalize yet.
+            // The turn ends on `idle`, which is when we create the single ConversationMessage.
+            if let tokens = tokens {
+                if let input = tokens.value["input"] as? Int {
+                    accumulatedInputTokens += input
+                }
+                if let output = tokens.value["output"] as? Int {
+                    accumulatedOutputTokens += output
+                }
+            }
+            if let cost = cost {
+                accumulatedCost += cost
+            }
+            // Clear assistantMessageId so the next message.start can set a new one
+            self.assistantMessageId = nil
+            print("[ChatVM] WS: message.complete — accumulated tokens: in=\(accumulatedInputTokens) out=\(accumulatedOutputTokens), cost=\(accumulatedCost)")
 
         case .error(let message):
             print("[ChatVM] WS error frame: \(message)")
@@ -224,10 +260,14 @@ final class ChatViewModel {
         case .idle:
             print("[ChatVM] WS: idle received")
             cancelLoadingTimeout()
+            stopSubAgentPolling()
             if !streamingParts.isEmpty {
                 finalizeStreamingMessage()
             }
             self.isLoading = false
+
+            // Clear sub-agent status bar — turn is complete, sub-agents shown in sidebar
+            subAgentTracker.stopTracking()
 
         case .questionAsked(let requestID, _):
             print("[ChatVM] WS: question.asked requestID=\(requestID)")
@@ -236,24 +276,83 @@ final class ChatViewModel {
     }
 
     /// Finalize the current streaming message into a completed ConversationMessage.
+    /// Uses accumulated tokens/cost from all `message.complete` events in the turn.
     private func finalizeStreamingMessage() {
         guard !streamingParts.isEmpty else { return }
         let finalParts = streamingPartOrder.compactMap { streamingParts[$0] }
         let finalText = streamingText.isEmpty ? "(No response received)" : streamingText
+
+        // Build tokens from accumulated values (nil if no tokens were received)
+        let tokens: MessageTokens? = (accumulatedInputTokens > 0 || accumulatedOutputTokens > 0)
+            ? MessageTokens(input: accumulatedInputTokens, output: accumulatedOutputTokens)
+            : nil
+        let cost: Double? = accumulatedCost > 0 ? accumulatedCost : nil
+
         let assistantMessage = ConversationMessage(
             id: UUID().uuidString,
             role: .assistant,
             content: finalText,
             parts: finalParts,
             timestamp: ISO8601DateFormatter().string(from: Date()),
-            tokens: nil,
-            cost: nil
+            tokens: tokens,
+            cost: cost
         )
         messages.append(assistantMessage)
         streamingParts = [:]
         streamingPartOrder = []
         assistantMessageId = nil
+        accumulatedInputTokens = 0
+        accumulatedOutputTokens = 0
+        accumulatedCost = 0
         isLoading = false
+    }
+
+    // MARK: - Merge Consecutive Assistant Messages
+
+    /// Merge consecutive assistant messages into a single ConversationMessage.
+    /// This handles historical conversations where multiple assistant messages
+    /// from the same turn were stored separately.
+    static func mergeConsecutiveAssistantMessages(_ messages: [ConversationMessage]) -> [ConversationMessage] {
+        var result: [ConversationMessage] = []
+        var pendingAssistant: ConversationMessage?
+
+        for msg in messages {
+            if msg.role == .assistant {
+                if var pending = pendingAssistant {
+                    // Merge into the pending assistant message
+                    let mergedContent = [pending.content, msg.content]
+                        .filter { !$0.isEmpty }
+                        .joined(separator: "\n")
+                    let mergedParts = pending.parts + msg.parts
+                    pending = ConversationMessage(
+                        id: pending.id,
+                        role: .assistant,
+                        content: mergedContent,
+                        parts: mergedParts,
+                        timestamp: pending.timestamp,
+                        tokens: nil,
+                        cost: nil
+                    )
+                    pendingAssistant = pending
+                } else {
+                    pendingAssistant = msg
+                }
+            } else {
+                // Non-assistant message — flush any pending assistant message first
+                if let pending = pendingAssistant {
+                    result.append(pending)
+                    pendingAssistant = nil
+                }
+                result.append(msg)
+            }
+        }
+
+        // Flush any remaining pending assistant message
+        if let pending = pendingAssistant {
+            result.append(pending)
+        }
+
+        return result
     }
 
     // MARK: - Load Conversation from Agent Manager
@@ -268,7 +367,8 @@ final class ChatViewModel {
             let client = AgentManagerClient(baseURL: baseURL)
             let conversation = try await client.getConversation(agentId: agentId)
 
-            messages = conversation.messages.compactMap { msg -> ConversationMessage? in
+            // Convert raw messages to ConversationMessages
+            let rawMessages = conversation.messages.compactMap { msg -> ConversationMessage? in
                 let role: MessageRole = msg.role == "user" ? .user : .assistant
                 let textContent = msg.contentBlocks
                     .filter { $0.type == "text" }
@@ -320,6 +420,9 @@ final class ChatViewModel {
                     cost: nil
                 )
             }
+
+            // Merge consecutive assistant messages into a single ConversationMessage
+            messages = Self.mergeConsecutiveAssistantMessages(rawMessages)
         } catch {
             print("[ChatVM] Failed to load conversation from agent-manager: \(error)")
             messages = []
@@ -328,7 +431,7 @@ final class ChatViewModel {
 
     // MARK: - Send Message (via WebSocket)
 
-    func sendMessage(serverManager: ServerManager) async {
+    func sendMessage(serverManager: ServerManager, workspaceViewModel: WorkspaceViewModel? = nil) async {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
@@ -347,8 +450,19 @@ final class ChatViewModel {
         streamingParts = [:]
         streamingPartOrder = []
         assistantMessageId = nil
+        accumulatedInputTokens = 0
+        accumulatedOutputTokens = 0
+        accumulatedCost = 0
         error = nil
         hasReceivedStreamingEvents = false
+
+        // Start sub-agent tracking if workspace context is available
+        if let workspaceViewModel {
+            subAgentTracker.startTracking(parentAgentId: agentId)
+            startSubAgentTracking(serverManager: serverManager, workspaceViewModel: workspaceViewModel)
+            self.lastServerManager = serverManager
+            self.lastWorkspaceViewModel = workspaceViewModel
+        }
 
         // Start loading timeout
         startLoadingTimeout()
@@ -377,27 +491,97 @@ final class ChatViewModel {
         pendingQuestionRequestID = nil
     }
 
+    // MARK: - Sub-Agent Tracking (Event-Driven)
+
+    /// Start sub-agent tracking using event-driven approach (no polling).
+    /// Only registers for real-time session.created events — no historical children are loaded.
+    /// Historical sub-agents belong in the sidebar tree, not the status bar.
+    private func startSubAgentTracking(serverManager: ServerManager, workspaceViewModel: WorkspaceViewModel) {
+        stopSubAgentPolling()
+        let parentSessionId = self.sessionId
+        print("[ChatVM] Starting event-driven sub-agent tracking for parentSession: \(parentSessionId)")
+
+        // Register for session.created events targeting our session as parent
+        workspaceViewModel.registerSessionCreatedHandler(parentSessionId: parentSessionId) { [weak self] eventData in
+            guard let self else { return }
+            let dict = eventData.value
+            guard let properties = dict["properties"] as? [String: Any],
+                  let infoDict = properties["info"] as? [String: Any],
+                  let sessionId = infoDict["id"] as? String,
+                  let title = infoDict["title"] as? String else { return }
+
+            print("[ChatVM] session.created event: \(title) (\(sessionId))")
+
+            let info = SubAgentInfo(
+                agentId: sessionId,
+                sessionId: sessionId,
+                label: title
+            )
+            if !self.subAgentTracker.activeSubAgents.contains(where: { $0.sessionId == sessionId }) {
+                self.subAgentTracker.activeSubAgents.append(info)
+                print("[SubAgentTracker] ✅ New sub-agent via event: \(title)")
+            }
+
+            // Register event handler for this sub-agent's streaming events
+            let tracker = self.subAgentTracker
+            workspaceViewModel.registerEventHandler(sessionId: sessionId) { eventData in
+                tracker.handleEvent(eventData: eventData)
+            }
+        }
+    }
+
+    /// Stop sub-agent tracking and unregister handlers.
+    private func stopSubAgentPolling() {
+        subAgentPollTask?.cancel()
+        subAgentPollTask = nil
+        // Unregister session.created handler
+        if let wvm = lastWorkspaceViewModel {
+            wvm.unregisterSessionCreatedHandler(parentSessionId: sessionId)
+        }
+    }
+
+    /// Store references for sub-agent tracking so handleFrame can auto-start on messageStart.
+    /// Does NOT start tracking immediately — waits for a messageStart event to avoid
+    /// loading historical sub-agents into the status bar when navigating to a conversation.
+    func startSubAgentTrackingIfNeeded(serverManager: ServerManager, workspaceViewModel: WorkspaceViewModel) {
+        // Store references so handleFrame can auto-start tracking on messageStart
+        self.lastServerManager = serverManager
+        self.lastWorkspaceViewModel = workspaceViewModel
+
+        // Don't start tracking here — wait for messageStart event
+        // This prevents loading historical sub-agents into the status bar
+        print("[ChatVM] Stored references for sub-agent tracking, waiting for messageStart")
+    }
+
     // MARK: - Cancel Streaming
 
     func cancelStreaming() {
         cancelLoadingTimeout()
+        stopSubAgentPolling()
         agentManagerClient?.sendCancel()
 
         if !streamingParts.isEmpty {
             let finalParts = streamingPartOrder.compactMap { streamingParts[$0] }
+            let tokens: MessageTokens? = (accumulatedInputTokens > 0 || accumulatedOutputTokens > 0)
+                ? MessageTokens(input: accumulatedInputTokens, output: accumulatedOutputTokens)
+                : nil
+            let cost: Double? = accumulatedCost > 0 ? accumulatedCost : nil
             let assistantMessage = ConversationMessage(
                 id: UUID().uuidString,
                 role: .assistant,
                 content: streamingText,
                 parts: finalParts,
                 timestamp: ISO8601DateFormatter().string(from: Date()),
-                tokens: nil,
-                cost: nil
+                tokens: tokens,
+                cost: cost
             )
             messages.append(assistantMessage)
             streamingParts = [:]
             streamingPartOrder = []
         }
+        accumulatedInputTokens = 0
+        accumulatedOutputTokens = 0
+        accumulatedCost = 0
         isLoading = false
     }
 }

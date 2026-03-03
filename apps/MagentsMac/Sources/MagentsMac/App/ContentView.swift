@@ -40,12 +40,12 @@ struct ContentView: View {
                let workspace = viewModel.workspaces.first(where: { $0.id == newId }) {
                 Task {
                     try? await serverManager.getOrStart(workspacePath: workspace.path)
-                    await viewModel.connectSSE(for: workspace, serverManager: serverManager)
+                    await viewModel.connectWorkspaceEvents(for: workspace, serverManager: serverManager)
                 }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-            viewModel.disconnectAllSSE()
+            viewModel.disconnectAllWorkspaceEvents()
             serverManager.stopAll()
         }
     }
@@ -70,13 +70,30 @@ struct ContentView: View {
                 ChatView(
                     agentId: agentId,
                     sessionId: agent.sessionId,
-                    workspacePath: workspacePath
+                    workspacePath: workspacePath,
+                    workspaceId: tab.workspaceId
                 )
             } else {
                 contentUnavailableView(
                     icon: "bubble.left.and.exclamationmark.bubble.right",
                     title: "Agent Not Found",
                     message: "The agent for this chat could not be located."
+                )
+            }
+
+        case .sessionChat(let sessionId):
+            if let workspacePath = workspacePath(for: tab) {
+                ChatView(
+                    agentId: sessionId,
+                    sessionId: sessionId,
+                    workspacePath: workspacePath,
+                    workspaceId: tab.workspaceId
+                )
+            } else {
+                contentUnavailableView(
+                    icon: "bubble.left.and.exclamationmark.bubble.right",
+                    title: "Workspace Not Found",
+                    message: "The workspace for this chat could not be located."
                 )
             }
 

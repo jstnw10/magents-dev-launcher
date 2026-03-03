@@ -98,26 +98,57 @@ struct SidebarView: View {
     private func workspaceDisclosure(_ workspace: WorkspaceConfig) -> some View {
         DisclosureGroup {
             let agents = viewModel.agents(for: workspace)
+
             if agents.isEmpty {
                 Text("No agents")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(agents) { agent in
-                    AgentRow(agent: agent, workspacePath: workspace.path) {
-                        // On remove: refresh agents list
-                        viewModel.agentsForWorkspace[workspace.id] = nil
-                        Task { await viewModel.loadAgents(for: workspace) }
-                    }
-                    .tag(agent.agentId)
-                    .onTapGesture {
-                        viewModel.selectedAgentId = agent.agentId
-                        tabManager.openTab(TabItem(
-                            title: agent.label,
-                            icon: "bubble.left.fill",
-                            contentType: .chat(agentId: agent.agentId),
-                            workspaceId: workspace.id
-                        ))
+                    let childSessions = viewModel.childSessions(parentId: agent.sessionId, for: workspace)
+
+                    if childSessions.isEmpty {
+                        // Agent with no sub-agents — show as simple row
+                        AgentRow(agent: agent, workspacePath: workspace.path) {
+                            viewModel.agentsForWorkspace[workspace.id] = nil
+                            Task { await viewModel.loadAgents(for: workspace) }
+                        }
+                        .tag(agent.agentId)
+                        .onTapGesture {
+                            viewModel.selectedAgentId = agent.agentId
+                            tabManager.openTab(TabItem(
+                                title: agent.label,
+                                icon: "bubble.left.fill",
+                                contentType: .chat(agentId: agent.agentId),
+                                workspaceId: workspace.id
+                            ))
+                        }
+                    } else {
+                        // Agent with sub-agents — show as disclosure group
+                        DisclosureGroup {
+                            ForEach(childSessions) { child in
+                                SessionRow(
+                                    session: child,
+                                    status: viewModel.sessionStatuses[child.id],
+                                    workspaceId: workspace.id
+                                )
+                            }
+                        } label: {
+                            AgentRow(agent: agent, workspacePath: workspace.path) {
+                                viewModel.agentsForWorkspace[workspace.id] = nil
+                                Task { await viewModel.loadAgents(for: workspace) }
+                            }
+                            .tag(agent.agentId)
+                            .onTapGesture {
+                                viewModel.selectedAgentId = agent.agentId
+                                tabManager.openTab(TabItem(
+                                    title: agent.label,
+                                    icon: "bubble.left.fill",
+                                    contentType: .chat(agentId: agent.agentId),
+                                    workspaceId: workspace.id
+                                ))
+                            }
+                        }
                     }
                 }
             }
@@ -152,6 +183,7 @@ struct SidebarView: View {
         }
         .task {
             await viewModel.loadAgents(for: workspace)
+            await viewModel.loadSessions(for: workspace, serverManager: serverManager)
         }
     }
 
