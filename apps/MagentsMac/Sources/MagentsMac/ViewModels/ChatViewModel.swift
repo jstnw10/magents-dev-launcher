@@ -266,6 +266,9 @@ final class ChatViewModel {
             }
             self.isLoading = false
 
+            // Clear sub-agent status bar — turn is complete, sub-agents shown in sidebar
+            subAgentTracker.stopTracking()
+
         case .questionAsked(let requestID, _):
             print("[ChatVM] WS: question.asked requestID=\(requestID)")
             self.pendingQuestionRequestID = requestID
@@ -491,13 +494,14 @@ final class ChatViewModel {
     // MARK: - Sub-Agent Tracking (Event-Driven)
 
     /// Start sub-agent tracking using event-driven approach (no polling).
+    /// Only registers for real-time session.created events — no historical children are loaded.
+    /// Historical sub-agents belong in the sidebar tree, not the status bar.
     private func startSubAgentTracking(serverManager: ServerManager, workspaceViewModel: WorkspaceViewModel) {
         stopSubAgentPolling()
-        let workspacePath = self.workspacePath
         let parentSessionId = self.sessionId
-        print("[ChatVM] Starting event-driven sub-agent tracking for workspace: \(workspacePath), parentSession: \(parentSessionId)")
+        print("[ChatVM] Starting event-driven sub-agent tracking for parentSession: \(parentSessionId)")
 
-        // 1. Register for session.created events targeting our session as parent
+        // Register for session.created events targeting our session as parent
         workspaceViewModel.registerSessionCreatedHandler(parentSessionId: parentSessionId) { [weak self] eventData in
             guard let self else { return }
             let dict = eventData.value
@@ -524,46 +528,6 @@ final class ChatViewModel {
                 tracker.handleEvent(eventData: eventData)
             }
         }
-
-        // 2. Load existing children (for when navigating to an already-active conversation)
-        subAgentPollTask = Task { [weak self] in
-            guard let self else { return }
-            guard let baseURL = serverManager.agentManagerURL(for: workspacePath) else { return }
-            let client = AgentManagerClient(baseURL: baseURL)
-
-            do {
-                let children = try await client.getChildSessions(parentSessionId: parentSessionId)
-                print("[ChatVM] Initial load: found \(children.count) child sessions")
-
-                for child in children {
-                    if !self.subAgentTracker.activeSubAgents.contains(where: { $0.sessionId == child.id }) {
-                        let info = SubAgentInfo(
-                            agentId: child.id,
-                            sessionId: child.id,
-                            label: child.title
-                        )
-                        self.subAgentTracker.activeSubAgents.append(info)
-                        print("[SubAgentTracker] ✅ Existing sub-agent: \(child.title)")
-
-                        // Register event handler
-                        let tracker = self.subAgentTracker
-                        workspaceViewModel.registerEventHandler(sessionId: child.id) { eventData in
-                            tracker.handleEvent(eventData: eventData)
-                        }
-                    }
-                }
-
-                // Also get current statuses to mark completed ones
-                let statuses = try await client.getSessionStatuses()
-                for (index, subAgent) in self.subAgentTracker.activeSubAgents.enumerated() {
-                    if let status = statuses[subAgent.sessionId], status.type == "idle" {
-                        self.subAgentTracker.activeSubAgents[index].isComplete = true
-                    }
-                }
-            } catch {
-                print("[ChatVM] Failed to load child sessions: \(error)")
-            }
-        }
     }
 
     /// Stop sub-agent tracking and unregister handlers.
@@ -576,23 +540,17 @@ final class ChatViewModel {
         }
     }
 
-    /// Start sub-agent tracking for an already-active agent.
-    /// Call this when navigating to a conversation where the agent may already be busy.
+    /// Store references for sub-agent tracking so handleFrame can auto-start on messageStart.
+    /// Does NOT start tracking immediately — waits for a messageStart event to avoid
+    /// loading historical sub-agents into the status bar when navigating to a conversation.
     func startSubAgentTrackingIfNeeded(serverManager: ServerManager, workspaceViewModel: WorkspaceViewModel) {
         // Store references so handleFrame can auto-start tracking on messageStart
         self.lastServerManager = serverManager
         self.lastWorkspaceViewModel = workspaceViewModel
 
-        // Don't start polling if already tracking
-        guard !subAgentTracker.isTracking else {
-            print("[ChatVM] Sub-agent tracking already active, skipping")
-            return
-        }
-
-        print("[ChatVM] startSubAgentTrackingIfNeeded: agentId=\(agentId), sessionId=\(sessionId), workspacePath=\(workspacePath)")
-
-        subAgentTracker.startTracking(parentAgentId: agentId)
-        startSubAgentTracking(serverManager: serverManager, workspaceViewModel: workspaceViewModel)
+        // Don't start tracking here — wait for messageStart event
+        // This prevents loading historical sub-agents into the status bar
+        print("[ChatVM] Stored references for sub-agent tracking, waiting for messageStart")
     }
 
     // MARK: - Cancel Streaming
