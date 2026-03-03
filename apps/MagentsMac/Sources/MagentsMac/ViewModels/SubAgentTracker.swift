@@ -19,7 +19,11 @@ struct SubAgentInfo: Identifiable, Sendable {
 final class SubAgentTracker {
     var activeSubAgents: [SubAgentInfo] = []
 
-    /// Agent IDs that existed before the current turn started.
+    /// The parent agent's ID.
+    private var parentAgentId: String = ""
+    /// The parent agent's creation date, used to detect sub-agents created after it.
+    private var parentCreatedAt: Date?
+    /// Agent IDs already tracked (parent + discovered sub-agents) to prevent re-adding.
     private var knownAgentIds: Set<String> = []
     /// Whether tracking is active.
     private(set) var isTracking: Bool = false
@@ -27,29 +31,46 @@ final class SubAgentTracker {
     // MARK: - Tracking Lifecycle
 
     /// Start tracking sub-agents for a parent agent turn.
-    /// Snapshots the current set of known agent IDs so new ones can be detected.
-    func startTracking(parentAgentId: String, currentAgents: [AgentMetadata]) {
-        knownAgentIds = Set(currentAgents.map(\.agentId))
+    /// Uses the parent's createdAt date to detect agents spawned after it.
+    func startTracking(parentAgentId: String, parentCreatedAt: Date?, currentAgents: [AgentMetadata]) {
+        self.parentAgentId = parentAgentId
+        self.parentCreatedAt = parentCreatedAt
+        knownAgentIds = Set([parentAgentId]) // Only mark the PARENT as known, not all agents
         activeSubAgents = []
         isTracking = true
-        print("[SubAgentTracker] Started tracking for parent \(parentAgentId), known agents: \(knownAgentIds.count)")
+        print("[SubAgentTracker] Started tracking for parent \(parentAgentId), parentCreatedAt: \(String(describing: parentCreatedAt))")
     }
 
-    /// Check for newly created agents by comparing against the snapshot.
+    /// Check for newly created agents by comparing createdAt against the parent.
     /// Call this periodically while the parent agent is busy.
     func checkForNewAgents(agents: [AgentMetadata]) {
         guard isTracking else { return }
 
         for agent in agents {
-            if !knownAgentIds.contains(agent.agentId),
-               !activeSubAgents.contains(where: { $0.agentId == agent.agentId }) {
+            // Skip the parent agent itself
+            if agent.agentId == parentAgentId { continue }
+            // Skip already-tracked agents
+            if activeSubAgents.contains(where: { $0.agentId == agent.agentId }) { continue }
+
+            // Detect sub-agents: created after the parent agent
+            var isSubAgent = false
+            if let parentCreated = parentCreatedAt,
+               let agentCreated = ISO8601DateFormatter().date(from: agent.createdAt) {
+                isSubAgent = agentCreated > parentCreated
+            } else {
+                // Fallback: if we can't compare dates, use the old snapshot approach
+                isSubAgent = !knownAgentIds.contains(agent.agentId)
+            }
+
+            if isSubAgent {
                 let info = SubAgentInfo(
                     agentId: agent.agentId,
                     sessionId: agent.sessionId,
                     label: agent.label
                 )
                 activeSubAgents.append(info)
-                print("[SubAgentTracker] Discovered new sub-agent: \(agent.label) (\(agent.agentId))")
+                knownAgentIds.insert(agent.agentId) // Prevent re-adding
+                print("[SubAgentTracker] Discovered sub-agent: \(agent.label) (\(agent.agentId))")
             }
         }
     }

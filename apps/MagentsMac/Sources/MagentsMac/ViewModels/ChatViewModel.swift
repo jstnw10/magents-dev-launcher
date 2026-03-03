@@ -162,7 +162,9 @@ final class ChatViewModel {
             // This handles navigating to an already-busy agent or an idle agent that becomes busy.
             if !subAgentTracker.isTracking, let sm = lastServerManager, let wvm = lastWorkspaceViewModel {
                 let currentAgents = wvm.agentsForWorkspace.values.flatMap { $0 }
-                subAgentTracker.startTracking(parentAgentId: agentId, currentAgents: Array(currentAgents))
+                let parentCreatedAt = currentAgents.first(where: { $0.agentId == agentId })
+                    .flatMap { ISO8601DateFormatter().date(from: $0.createdAt) }
+                subAgentTracker.startTracking(parentAgentId: agentId, parentCreatedAt: parentCreatedAt, currentAgents: Array(currentAgents))
                 startSubAgentPolling(serverManager: sm, workspaceViewModel: wvm)
             }
 
@@ -456,7 +458,9 @@ final class ChatViewModel {
         // Start sub-agent tracking if workspace context is available
         if let workspaceViewModel {
             let currentAgents = workspaceViewModel.agentsForWorkspace.values.flatMap { $0 }
-            subAgentTracker.startTracking(parentAgentId: agentId, currentAgents: Array(currentAgents))
+            let parentCreatedAt = currentAgents.first(where: { $0.agentId == agentId })
+                .flatMap { ISO8601DateFormatter().date(from: $0.createdAt) }
+            subAgentTracker.startTracking(parentAgentId: agentId, parentCreatedAt: parentCreatedAt, currentAgents: Array(currentAgents))
             startSubAgentPolling(serverManager: serverManager, workspaceViewModel: workspaceViewModel)
             self.lastServerManager = serverManager
             self.lastWorkspaceViewModel = workspaceViewModel
@@ -497,8 +501,13 @@ final class ChatViewModel {
         let workspacePath = self.workspacePath
 
         subAgentPollTask = Task { [weak self] in
+            var isFirstPoll = true
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(4))
+                // First poll is immediate, subsequent polls wait 4 seconds
+                if !isFirstPoll {
+                    try? await Task.sleep(for: .seconds(4))
+                }
+                isFirstPoll = false
                 guard !Task.isCancelled, let self else { break }
 
                 // Reload agents from the server
@@ -539,7 +548,9 @@ final class ChatViewModel {
         guard !subAgentTracker.isTracking else { return }
 
         let currentAgents = workspaceViewModel.agentsForWorkspace.values.flatMap { $0 }
-        subAgentTracker.startTracking(parentAgentId: agentId, currentAgents: Array(currentAgents))
+        let parentCreatedAt = currentAgents.first(where: { $0.agentId == agentId })
+            .flatMap { ISO8601DateFormatter().date(from: $0.createdAt) }
+        subAgentTracker.startTracking(parentAgentId: agentId, parentCreatedAt: parentCreatedAt, currentAgents: Array(currentAgents))
         startSubAgentPolling(serverManager: serverManager, workspaceViewModel: workspaceViewModel)
     }
 
