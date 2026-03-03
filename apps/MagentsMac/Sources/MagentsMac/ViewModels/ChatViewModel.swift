@@ -160,10 +160,14 @@ final class ChatViewModel {
 
             // Auto-start sub-agent tracking if not already active.
             // This handles navigating to an already-busy agent or an idle agent that becomes busy.
+            print("[ChatVM] messageStart: subAgentTracker.isTracking=\(subAgentTracker.isTracking), lastServerManager=\(lastServerManager != nil), lastWorkspaceViewModel=\(lastWorkspaceViewModel != nil)")
             if !subAgentTracker.isTracking, let sm = lastServerManager, let wvm = lastWorkspaceViewModel {
                 let currentAgents = wvm.agentsForWorkspace.values.flatMap { $0 }
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
                 let parentCreatedAt = currentAgents.first(where: { $0.agentId == agentId })
-                    .flatMap { ISO8601DateFormatter().date(from: $0.createdAt) }
+                    .flatMap { formatter.date(from: $0.createdAt) }
+                print("[ChatVM] messageStart auto-track: currentAgents=\(currentAgents.count), parentCreatedAt=\(String(describing: parentCreatedAt))")
                 subAgentTracker.startTracking(parentAgentId: agentId, parentCreatedAt: parentCreatedAt, currentAgents: Array(currentAgents))
                 startSubAgentPolling(serverManager: sm, workspaceViewModel: wvm)
             }
@@ -458,8 +462,11 @@ final class ChatViewModel {
         // Start sub-agent tracking if workspace context is available
         if let workspaceViewModel {
             let currentAgents = workspaceViewModel.agentsForWorkspace.values.flatMap { $0 }
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             let parentCreatedAt = currentAgents.first(where: { $0.agentId == agentId })
-                .flatMap { ISO8601DateFormatter().date(from: $0.createdAt) }
+                .flatMap { formatter.date(from: $0.createdAt) }
+            print("[ChatVM] sendMessage: currentAgents=\(currentAgents.count), parentCreatedAt=\(String(describing: parentCreatedAt))")
             subAgentTracker.startTracking(parentAgentId: agentId, parentCreatedAt: parentCreatedAt, currentAgents: Array(currentAgents))
             startSubAgentPolling(serverManager: serverManager, workspaceViewModel: workspaceViewModel)
             self.lastServerManager = serverManager
@@ -499,6 +506,7 @@ final class ChatViewModel {
     private func startSubAgentPolling(serverManager: ServerManager, workspaceViewModel: WorkspaceViewModel) {
         stopSubAgentPolling()
         let workspacePath = self.workspacePath
+        print("[ChatVM] Starting sub-agent polling for workspace: \(workspacePath)")
 
         subAgentPollTask = Task { [weak self] in
             var isFirstPoll = true
@@ -511,11 +519,17 @@ final class ChatViewModel {
                 guard !Task.isCancelled, let self else { break }
 
                 // Reload agents from the server
-                guard let baseURL = serverManager.agentManagerURL(for: workspacePath) else { continue }
+                guard let baseURL = serverManager.agentManagerURL(for: workspacePath) else {
+                    print("[ChatVM] Sub-agent poll: no baseURL for workspace \(workspacePath)")
+                    continue
+                }
+                print("[ChatVM] Sub-agent poll: baseURL=\(baseURL)")
                 let client = AgentManagerClient(baseURL: baseURL)
                 do {
                     let agents = try await client.listAgents()
+                    print("[ChatVM] Sub-agent poll: got \(agents.count) agents from server")
                     self.subAgentTracker.checkForNewAgents(agents: agents)
+                    print("[ChatVM] Sub-agent poll: activeSubAgents=\(self.subAgentTracker.activeSubAgents.count)")
 
                     // Register event handlers for newly discovered sub-agents
                     for subAgent in self.subAgentTracker.activeSubAgents where !subAgent.isComplete {
@@ -545,11 +559,22 @@ final class ChatViewModel {
         self.lastWorkspaceViewModel = workspaceViewModel
 
         // Don't start polling if already tracking
-        guard !subAgentTracker.isTracking else { return }
+        guard !subAgentTracker.isTracking else {
+            print("[ChatVM] Sub-agent tracking already active, skipping")
+            return
+        }
 
         let currentAgents = workspaceViewModel.agentsForWorkspace.values.flatMap { $0 }
-        let parentCreatedAt = currentAgents.first(where: { $0.agentId == agentId })
-            .flatMap { ISO8601DateFormatter().date(from: $0.createdAt) }
+        print("[ChatVM] startSubAgentTrackingIfNeeded: agentId=\(agentId), currentAgents=\(currentAgents.count), workspacePath=\(workspacePath)")
+
+        let parentAgent = currentAgents.first(where: { $0.agentId == agentId })
+        print("[ChatVM] Parent agent found: \(parentAgent != nil), createdAt: \(parentAgent?.createdAt ?? "nil")")
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let parentCreatedAt = parentAgent.flatMap { formatter.date(from: $0.createdAt) }
+        print("[ChatVM] Parsed parentCreatedAt: \(String(describing: parentCreatedAt))")
+
         subAgentTracker.startTracking(parentAgentId: agentId, parentCreatedAt: parentCreatedAt, currentAgents: Array(currentAgents))
         startSubAgentPolling(serverManager: serverManager, workspaceViewModel: workspaceViewModel)
     }

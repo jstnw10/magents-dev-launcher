@@ -44,7 +44,15 @@ final class SubAgentTracker {
     /// Check for newly created agents by comparing createdAt against the parent.
     /// Call this periodically while the parent agent is busy.
     func checkForNewAgents(agents: [AgentMetadata]) {
-        guard isTracking else { return }
+        guard isTracking else {
+            print("[SubAgentTracker] checkForNewAgents called but not tracking")
+            return
+        }
+
+        print("[SubAgentTracker] Checking \(agents.count) agents, parentAgentId=\(parentAgentId), parentCreatedAt=\(String(describing: parentCreatedAt))")
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
         for agent in agents {
             // Skip the parent agent itself
@@ -55,11 +63,13 @@ final class SubAgentTracker {
             // Detect sub-agents: created after the parent agent
             var isSubAgent = false
             if let parentCreated = parentCreatedAt,
-               let agentCreated = ISO8601DateFormatter().date(from: agent.createdAt) {
+               let agentCreated = formatter.date(from: agent.createdAt) {
                 isSubAgent = agentCreated > parentCreated
+                print("[SubAgentTracker] Agent \(agent.label) (\(agent.agentId)): created=\(agent.createdAt), parsed=\(agentCreated), parentCreated=\(parentCreated), isSubAgent=\(isSubAgent)")
             } else {
                 // Fallback: if we can't compare dates, use the old snapshot approach
                 isSubAgent = !knownAgentIds.contains(agent.agentId)
+                print("[SubAgentTracker] Agent \(agent.label) (\(agent.agentId)): date parse fallback, isSubAgent=\(isSubAgent), createdAt=\(agent.createdAt)")
             }
 
             if isSubAgent {
@@ -70,9 +80,11 @@ final class SubAgentTracker {
                 )
                 activeSubAgents.append(info)
                 knownAgentIds.insert(agent.agentId) // Prevent re-adding
-                print("[SubAgentTracker] Discovered sub-agent: \(agent.label) (\(agent.agentId))")
+                print("[SubAgentTracker] ✅ Discovered sub-agent: \(agent.label) (\(agent.agentId))")
             }
         }
+
+        print("[SubAgentTracker] After check: \(activeSubAgents.count) active sub-agents")
     }
 
     /// Handle a raw event routed from WorkspaceViewModel.
