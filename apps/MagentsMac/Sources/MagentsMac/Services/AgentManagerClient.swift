@@ -348,7 +348,7 @@ struct SessionStatusInfo: Codable, Sendable {
 
 // MARK: - Session List Response (from GET /session)
 
-struct SessionInfo: Codable, Sendable {
+struct SessionInfo: Codable, Identifiable, Sendable {
     let id: String
     let directory: String
     let parentID: String?

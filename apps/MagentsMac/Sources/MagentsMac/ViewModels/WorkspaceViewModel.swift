@@ -11,6 +11,10 @@ final class WorkspaceViewModel {
     var agentsForWorkspace: [String: [AgentMetadata]] = [:]
     var isLoading = false
 
+    // Session tree data (all OpenCode sessions per workspace)
+    var sessionsForWorkspace: [String: [SessionInfo]] = [:]
+    var sessionStatuses: [String: String] = [:]  // sessionId -> "idle" | "busy" | "retry"
+
     // WebSocket connection per workspace (to agent-server /events)
     private var workspaceWebSockets: [String: URLSessionWebSocketTask] = [:]
     private var workspaceWebSocketTasks: [String: Task<Void, Never>] = [:]
@@ -72,6 +76,36 @@ final class WorkspaceViewModel {
 
     func agents(for workspace: WorkspaceConfig) -> [AgentMetadata] {
         agentsForWorkspace[workspace.id] ?? []
+    }
+
+    // MARK: - Session Tree
+
+    func loadSessions(for workspace: WorkspaceConfig, serverManager: ServerManager) async {
+        guard let baseURL = serverManager.agentManagerURL(for: workspace.path) else { return }
+        let client = AgentManagerClient(baseURL: baseURL)
+        do {
+            let sessions = try await client.listSessions()
+            sessionsForWorkspace[workspace.id] = sessions
+        } catch {
+            print("[WorkspaceVM] Failed to load sessions for \(workspace.title): \(error)")
+            sessionsForWorkspace[workspace.id] = []
+        }
+    }
+
+    func sessions(for workspace: WorkspaceConfig) -> [SessionInfo] {
+        sessionsForWorkspace[workspace.id] ?? []
+    }
+
+    /// Returns root sessions (no parentID) for a workspace
+    func rootSessions(for workspace: WorkspaceConfig) -> [SessionInfo] {
+        sessions(for: workspace).filter { $0.parentID == nil }
+            .sorted { $0.time.created > $1.time.created }
+    }
+
+    /// Returns child sessions of a given parent
+    func childSessions(parentId: String, for workspace: WorkspaceConfig) -> [SessionInfo] {
+        sessions(for: workspace).filter { $0.parentID == parentId }
+            .sorted { $0.time.created < $1.time.created }
     }
 
     // MARK: - Workspace Event Connection (WebSocket to agent-server)
@@ -251,6 +285,9 @@ final class WorkspaceViewModel {
             let status = AgentStatus(rawValue: statusType) ?? .idle
             agentStatuses[sessionID] = status
 
+            // Update session status for sidebar
+            sessionStatuses[sessionID] = statusType
+
             // Update agent metadata in the agents list
             if var agents = agentsForWorkspace[workspaceId],
                let agentIndex = agents.firstIndex(where: { $0.sessionId == sessionID }) {
@@ -259,12 +296,35 @@ final class WorkspaceViewModel {
             }
         }
 
-        // Handle session.created for sub-agent tracking
+        // Handle session.created for sub-agent tracking + sidebar session tree
         if eventType == "session.created",
            let infoDict = properties["info"] as? [String: Any],
-           let parentId = infoDict["parentID"] as? String,
-           let handler = sessionCreatedHandlers[parentId] {
-            handler(SendableDict(value: json))
+           let sessionId = infoDict["id"] as? String,
+           let title = infoDict["title"] as? String,
+           let directory = infoDict["directory"] as? String,
+           let timeDict = infoDict["time"] as? [String: Any],
+           let created = timeDict["created"] as? Double,
+           let updated = timeDict["updated"] as? Double {
+            let parentID = infoDict["parentID"] as? String
+            let newSession = SessionInfo(
+                id: sessionId,
+                directory: directory,
+                parentID: parentID,
+                title: title,
+                time: SessionInfo.SessionTime(created: created, updated: updated)
+            )
+            // Add to the workspace's session list if not already present
+            if var sessions = sessionsForWorkspace[workspaceId],
+               !sessions.contains(where: { $0.id == sessionId }) {
+                sessions.append(newSession)
+                sessionsForWorkspace[workspaceId] = sessions
+            }
+
+            // Forward to sub-agent tracking handler
+            if let parentID = parentID,
+               let handler = sessionCreatedHandlers[parentID] {
+                handler(SendableDict(value: json))
+            }
         }
 
         // Route event to registered handler (ChatViewModel or SubAgentTracker)
